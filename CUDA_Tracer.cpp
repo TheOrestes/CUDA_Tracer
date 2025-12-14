@@ -6,6 +6,9 @@
 #include "GL/glew.h"
 #include "GLFW/glfw3.h"
 
+#include <cuda_runtime.h>
+#include <cuda_gl_interop.h>
+
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
 float red = 1.0f;
@@ -13,18 +16,28 @@ float green = 1.0f;
 float blue = 1.0f;
 
 //---------------------------------------------------------------------------------------------------------------------
+// Helper to check CUDA errors
+void checkCudaError(cudaError_t err, const char* msg)
+{
+	if (err != cudaSuccess) {
+		std::cerr << "CUDA Error (" << msg << "): " << cudaGetErrorString(err) << std::endl;
+		exit(EXIT_FAILURE);
+	}
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // 1. Initialize GLFW & Create Window - Opengl context
 void InitGLFW()
 {
 	// Initialize & Setup basic 
 	glfwInit();
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
 	// Create a window!
-	window = glfwCreateWindow(800, 600, "Hello OpenGL Window", nullptr, nullptr);
+	window = glfwCreateWindow(800, 600, "CUDA RT", nullptr, nullptr);
 
 	if (!window)
 	{
@@ -76,12 +89,51 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// 4. Create GL texture & register with CUDA!
+void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
+{
+	glGenTextures(1, textureID);
+	glBindTexture(GL_TEXTURE_2D, *textureID);
+
+	// Set texture parameters
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	// Allocate texture memory (RGBA float format)
+	constexpr int width = 800;
+	constexpr int height = 600;
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, nullptr);
+
+	// Unbind to ensure we aren't modifying it accidentally
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	// Register the texture.
+	// Flags:
+	// - cudaGraphicsRegisterFlagsNone: Default
+	// - cudaGraphicsRegisterFlagsReadOnly: CUDA will not write to this texture
+	// - cudaGraphicsRegisterFlagsSurfaceLoadStore: Enable writing via CUDA surfaces
+	const cudaError_t err = cudaGraphicsGLRegisterImage(cudaResource, *textureID, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore);
+
+	checkCudaError(err, "Registering Image");
+
+	std::cout << "Successfully registered OpenGL texture " << *textureID << " with CUDA." << std::endl;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 int main()
 {
 	InitGLFW();
 	InitGLEW();
 
 	glfwSetKeyCallback(window, KeyHandler);
+
+	GLuint myTexture;
+	cudaGraphicsResource_t myCudaResource;
+
+	// Call the function
+	CreateTextureCUDA(&myTexture, &myCudaResource);
 
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
@@ -94,6 +146,10 @@ int main()
 		glfwSwapBuffers(window);
 	}
 
+	// 4. Cleanup
+	// Always unregister before destroying the GL texture
+	cudaGraphicsUnregisterResource(myCudaResource);
+	glDeleteTextures(1, &myTexture);
 	glfwTerminate();
     
 	return 0;
