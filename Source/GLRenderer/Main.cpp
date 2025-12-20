@@ -9,11 +9,13 @@
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
+#include "Kernels/Kernels.h"
+
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
-float red = 1.0f;
-float green = 1.0f;
-float blue = 1.0f;
+
+constexpr int width = 960;
+constexpr int height = 540;
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -37,7 +39,7 @@ void InitGLFW()
 	glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
 	// Create a window!
-	window = glfwCreateWindow(800, 600, "CUDA RT", nullptr, nullptr);
+	window = glfwCreateWindow(width, height, "CUDA RT", nullptr, nullptr);
 
 	if (!window)
 	{
@@ -69,23 +71,17 @@ void InitGLEW()
 // 3. Inputs
 void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
-	if (key == GLFW_KEY_R && action == GLFW_PRESS)
-	{
-		red = 1.0f;
-		green = blue = 0.0f;
-	}
-
-	if (key == GLFW_KEY_G && action == GLFW_PRESS)
-	{
-		green = 1.0f;
-		red = blue = 0.0f;
-	}
-
-	if (key == GLFW_KEY_B && action == GLFW_PRESS)
-	{
-		blue = 1.0f;
-		red = green = 0.0f;
-	}
+	//if (key == GLFW_KEY_R && action == GLFW_PRESS)
+	//{
+	//}
+	//
+	//if (key == GLFW_KEY_G && action == GLFW_PRESS)
+	//{
+	//}
+	//
+	//if (key == GLFW_KEY_B && action == GLFW_PRESS)
+	//{
+	//}
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -102,8 +98,6 @@ void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	// Allocate texture memory (RGBA float format)
-	constexpr int width = 800;
-	constexpr int height = 600;
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, nullptr);
 
 	// Unbind to ensure we aren't modifying it accidentally
@@ -129,27 +123,50 @@ int main()
 
 	glfwSetKeyCallback(window, KeyHandler);
 
-	GLuint myTexture;
-	cudaGraphicsResource_t myCudaResource;
+	GLuint fbTexture;
+	cudaGraphicsResource_t fbCudaResource;
 
 	// Call the function
-	CreateTextureCUDA(&myTexture, &myCudaResource);
+	CreateTextureCUDA(&fbTexture, &fbCudaResource);
+
+	// Create Framebuffer object & attach CUDA-written texture to it!
+	GLuint fbo;
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbTexture, 0);
 
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
 	{
 		glfwPollEvents();
 
-		glClearColor(red, green, blue, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
+		const float time = static_cast<float>(glfwGetTime());
+
+		// Run CUDA kernel!
+		RunRayTracingKernel(fbCudaResource, width, height, time);
+
+		// Bind the FBO as the "Read" source
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+		// Bind the default screen (0) as the "Draw" destination
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+		glBlitFramebuffer(
+			0, 0, width, height,
+			0, 0, width, height,
+			GL_COLOR_BUFFER_BIT,
+			GL_NEAREST
+		);
 
 		glfwSwapBuffers(window);
 	}
 
 	// 4. Cleanup
 	// Always unregister before destroying the GL texture
-	cudaGraphicsUnregisterResource(myCudaResource);
-	glDeleteTextures(1, &myTexture);
+	cudaGraphicsUnregisterResource(fbCudaResource);
+
+	glDeleteFramebuffers(1, &fbo);
+	glDeleteTextures(1, &fbTexture);
 	glfwTerminate();
     
 	return 0;
