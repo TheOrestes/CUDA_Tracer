@@ -67,11 +67,11 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	cudaCreateSurfaceObject(&surface, &resDesc);
 
 	// Configure the kernel launch grid
-	dim3 blockSize(16, 16);
-	dim3 gridSize((cuWidth + blockSize.x - 1) / blockSize.x, (cuHeight + blockSize.y - 1) / blockSize.y);
+	dim3 threadsPerBlock(16, 16);
+	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer << <gridSize, blockSize >> > (surface, cuWidth, cuHeight, camera);
+	RayTracer << <blocksPerGrid, threadsPerBlock>> > (surface, cuWidth, cuHeight, camera);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);
