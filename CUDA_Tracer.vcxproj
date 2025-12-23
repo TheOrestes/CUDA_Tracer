@@ -135,7 +135,7 @@
     <ClCompile Include="Source\GLRenderer\Main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\Kernels\Kernels.h" />
+    <ClInclude Include="Source\GLRenderer\Common.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="Source\Kernels\Kernels.cu" />

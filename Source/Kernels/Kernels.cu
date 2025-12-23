@@ -1,27 +1,44 @@
 
-#include "Kernels.h"
+#include "GLRenderer/Common.h"
 
 #include <corecrt_math.h>
 #include <device_launch_parameters.h>
 
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, float time)
+__device__ float3 GetMissColor(const RT::Ray& r)
+{
+	float3 unit_direction = unit_vector(r.Direction);
+	float t = 0.5f * (unit_direction.y + 1.0f);
+
+	// Lerp: White (1,1,1) to Blue (0.5, 0.7, 1.0)
+	float3 white = make_float3(1.0f, 1.0f, 1.0f);
+	float3 blue = make_float3(0.5f, 0.7f, 1.0f);
+
+	return white * (1.0f - t) + blue * t;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	if (x < width && y < height) 
-	{
-		float u = x / (float)width;
-		float v = y / (float)height;
+	if (x >= width || y >= height)  return;
 
-		float r = 0.5f + 0.5f * sinf(time + u * 6.28f);
-		float g = 0.5f + 0.5f * cosf(time + v * 6.28f);
-		float b = 0.5f + 0.5f * sinf(time + (u + v) * 6.28f);
+	// Normalized coordinates
+	float u = float(x) / float(width - 1);
+	float v = float(y) / float(height - 1);
 
-		// x * sizeof(float4) is CRITICAL for surf2Dwrite
-		surf2Dwrite(make_float4(r, g, b, 1.0f), surface, x * sizeof(float4), y);
-	}
+	// 1. Generate Ray from Camera
+	RT::Ray r = cam.GetRay(u, v);
+
+	// 2. Calculate Color
+	float3 pixelColor = GetMissColor(r);
+
+	// 4. Write final color to the framebuffer!
+	// x * sizeof(float4) is CRITICAL for surf2Dwrite
+	float4 finalColor = make_float4(pixelColor.x, pixelColor.y, pixelColor.z, 1.0f);
+	surf2Dwrite(finalColor, surface, x * sizeof(float4), y);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -30,7 +47,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, fl
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, float time)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -54,7 +71,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 gridSize((cuWidth + blockSize.x - 1) / blockSize.x, (cuHeight + blockSize.y - 1) / blockSize.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer << <gridSize, blockSize >> > (surface, cuWidth, cuHeight, time);
+	RayTracer << <gridSize, blockSize >> > (surface, cuWidth, cuHeight, camera);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);

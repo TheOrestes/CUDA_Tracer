@@ -9,13 +9,13 @@
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
-#include "Kernels/Kernels.h"
+#include "GLRenderer/Common.h"
 
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
 
-constexpr int width = 960;
-constexpr int height = 540;
+constexpr int width = 600;
+constexpr int height = 450;
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -136,6 +136,14 @@ int main()
 
 	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbTexture, 0);
 
+	// Initialize Scene!
+	float3 lookfrom = make_float3(0, 0, 2);
+	float3 lookat = make_float3(0, 0, -1);
+	float3 vup = make_float3(0, 1, 0);
+
+	RT::Camera mainCamera(lookfrom, lookat, vup, 45.0f, static_cast<float>(width) / static_cast<float>(height));
+
+
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
 	{
@@ -144,7 +152,7 @@ int main()
 		const float time = static_cast<float>(glfwGetTime());
 
 		// Run CUDA kernel!
-		RunRayTracingKernel(fbCudaResource, width, height, time);
+		RunRayTracingKernel(fbCudaResource, width, height, mainCamera);
 
 		// Bind the FBO as the "Read" source
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
