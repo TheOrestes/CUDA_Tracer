@@ -6,16 +6,21 @@
 #include "GL/glew.h"
 #include "GLFW/glfw3.h"
 
-#include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
 #include "GLRenderer/Common.h"
 
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
+float4* gAccumulationBuffer = nullptr;
 
 constexpr int width = 600;
 constexpr int height = 450;
+
+RT::Camera gCamera;
+
+// Input State
+bool keys[1024] = { false };
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -71,17 +76,13 @@ void InitGLEW()
 // 3. Inputs
 void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
-	//if (key == GLFW_KEY_R && action == GLFW_PRESS)
-	//{
-	//}
-	//
-	//if (key == GLFW_KEY_G && action == GLFW_PRESS)
-	//{
-	//}
-	//
-	//if (key == GLFW_KEY_B && action == GLFW_PRESS)
-	//{
-	//}
+	if (key >= 0 && key < 1024)
+	{
+		if (action == GLFW_PRESS)
+			keys[key] = true;
+		else if (action == GLFW_RELEASE)
+			keys[key] = false;
+	}
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -115,6 +116,43 @@ void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
 	std::cout << "Successfully registered OpenGL texture " << *textureID << " with CUDA." << std::endl;
 }
 
+// -------------------------------------------------------------------------------------------------------------------- -
+// 5. Process Input
+bool ProcessInput(float dt)
+{
+	bool moved = false;
+
+	const float cameraSpeed = 2.5f * dt; // Adjust speed as needed
+
+	// We need the camera's basis vectors to move relative to view
+	// Forward is -w, Right is u, Up is v (or global up {0,1,0})
+	const float3 forward = gCamera.w * -1.0f;
+	const float3 right = gCamera.u;
+	constexpr float3 up = { 0.0f, 1.0f, 0.0f }; // Keep movement parallel to ground? Or use g_camera.v for free-fly
+
+	float3 movement = { 0.0f, 0.0f, 0.0f };
+
+	if (keys[GLFW_KEY_W]) movement = movement + forward * cameraSpeed;
+	if (keys[GLFW_KEY_S]) movement = movement - forward * cameraSpeed;
+	if (keys[GLFW_KEY_A]) movement = movement - right * cameraSpeed;
+	if (keys[GLFW_KEY_D]) movement = movement + right * cameraSpeed;
+
+	// Optional: Q/E for Up/Down
+	if (keys[GLFW_KEY_E]) movement = movement + up * cameraSpeed;
+	if (keys[GLFW_KEY_Q]) movement = movement - up * cameraSpeed;
+
+	// Apply movement
+	// Note: We only update origin, assuming orientation (lookAt direction) stays locked for now
+	// For full FPS controls, you'd need to rotate the basis vectors too.
+	if (dot(movement, movement) > 0.0f) 
+	{
+		gCamera.move(movement);
+		moved = true;
+	}
+
+	return moved;
+}
+
 //---------------------------------------------------------------------------------------------------------------------
 int main()
 {
@@ -136,23 +174,40 @@ int main()
 
 	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbTexture, 0);
 
+	// Allocate Accumulation buffer on GPU!
+	constexpr size_t bufferSize = width * height * sizeof(float4);
+	cudaMalloc(&gAccumulationBuffer, bufferSize);
+	cudaMemset(gAccumulationBuffer, 0, bufferSize);
+
 	// Initialize Scene!
-	float3 lookfrom = make_float3(0, 0, 2);
-	float3 lookat = make_float3(0, 0, -1);
-	float3 vup = make_float3(0, 1, 0);
+	gCamera.Init(make_float3(0, 0, 2), make_float3(0, 0, -1), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
 
-	RT::Camera mainCamera(lookfrom, lookat, vup, 45.0f, static_cast<float>(width) / static_cast<float>(height));
-
+	float deltaTime = 0.0f;
+	float lastFrameTime = 0.0f;
+	int frameCount = 0;				// Accumulation counter!
 
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
 	{
-		glfwPollEvents();
+		const float currentTime = static_cast<float>(glfwGetTime());
+		deltaTime = currentTime - lastFrameTime;
+		lastFrameTime = currentTime;
 
-		const float time = static_cast<float>(glfwGetTime());
+		glfwPollEvents();
+		const bool cameraMoved = ProcessInput(deltaTime);
+
+		// If camera has moved, then RESET the accumulation! 
+		if (cameraMoved)
+		{
+			frameCount = 0;
+			cudaMemset(gAccumulationBuffer, 0, bufferSize);
+		}
+
+		// Increment frame counter, affects RNG seed!
+		frameCount++;
 
 		// Run CUDA kernel!
-		RunRayTracingKernel(fbCudaResource, width, height, mainCamera);
+		RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, frameCount);
 
 		// Bind the FBO as the "Read" source
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
@@ -172,6 +227,7 @@ int main()
 	// 4. Cleanup
 	// Always unregister before destroying the GL texture
 	cudaGraphicsUnregisterResource(fbCudaResource);
+	cudaFree(gAccumulationBuffer);
 
 	glDeleteFramebuffers(1, &fbo);
 	glDeleteTextures(1, &fbTexture);

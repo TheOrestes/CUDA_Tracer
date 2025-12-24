@@ -1,43 +1,83 @@
 
 #include "GLRenderer/Common.h"
 
-#include <corecrt_math.h>
+#include <cuda_runtime.h>
+#include <curand_kernel.h>
 #include <device_launch_parameters.h>
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ float3 GetMissColor(const RT::Ray& r)
+// --- Helper: Random float in [0, 1] ---
+__device__ inline float rand_float(curandState* state)
+{
+	return curand_uniform(state);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 {
 	float3 unit_direction = unit_vector(r.Direction);
 	float t = 0.5f * (unit_direction.y + 1.0f);
 
 	// Lerp: White (1,1,1) to Blue (0.5, 0.7, 1.0)
-	float3 white = make_float3(1.0f, 1.0f, 1.0f);
-	float3 blue = make_float3(0.5f, 0.7f, 1.0f);
+	float3 white = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
+	float3 blue = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
 
 	return white * (1.0f - t) + blue * t;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam)
+__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, int frameCount, float4* accumBuffer)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
 
 	if (x >= width || y >= height)  return;
 
+	// Initialize RNG per pixel
+	int pixelIndex = y * width + x;
+	curandState localState;
+	curand_init(1984 + pixelIndex, frameCount, 0, &localState);
+
 	// Normalized coordinates
-	float u = float(x) / float(width - 1);
-	float v = float(y) / float(height - 1);
+	float u = (float(x) + rand_float(&localState)) / float(width - 1);
+	float v = (float(y) + rand_float(&localState)) / float(height - 1);
 
 	// 1. Generate Ray from Camera
 	RT::Ray r = cam.GetRay(u, v);
 
 	// 2. Calculate Color
-	float3 pixelColor = GetMissColor(r);
+	float3 currentColor = GetMissColor(r, localState);
+	float4 currentColorRGBA = make_float4(currentColor.x, currentColor.y, currentColor.z, 1.0f);
+
+	// Accumulation logic!
+	float4 finalColor;
+
+	if(frameCount == 1)
+	{
+		// First frame, just save the current color!
+		finalColor = currentColorRGBA;
+		accumBuffer[pixelIndex] = finalColor;
+	}
+	else
+	{
+		// subsequent frames = Blend!
+		float4 oldColor = accumBuffer[pixelIndex];
+
+		float n = float(frameCount);
+
+		finalColor.x = oldColor.x + (currentColorRGBA.x - oldColor.x) / n;
+		finalColor.y = oldColor.y + (currentColorRGBA.y - oldColor.y) / n;
+		finalColor.z = oldColor.z + (currentColorRGBA.z - oldColor.z) / n;
+		finalColor.w = 1.0f;
+
+		// store back to buffer
+		accumBuffer[pixelIndex] = finalColor;
+	}
+
+	// can do gamma correction here if required!
 
 	// 4. Write final color to the framebuffer!
 	// x * sizeof(float4) is CRITICAL for surf2Dwrite
-	float4 finalColor = make_float4(pixelColor.x, pixelColor.y, pixelColor.z, 1.0f);
 	surf2Dwrite(finalColor, surface, x * sizeof(float4), y);
 }
 
@@ -47,7 +87,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* accumBuffer, int frameCount)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -71,7 +111,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer << <blocksPerGrid, threadsPerBlock>> > (surface, cuWidth, cuHeight, camera);
+	RayTracer << <blocksPerGrid, threadsPerBlock>> > (surface, cuWidth, cuHeight, camera, frameCount, accumBuffer);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);

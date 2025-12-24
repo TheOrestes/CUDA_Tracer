@@ -61,7 +61,7 @@ __host__ __device__ inline float3 unit_vector(const float3& v)
 //-----------------------------------------------------------------------------------------------------------------
 namespace RT
 {
-    //-----------------------------------------------------------------------------------------------------------------
+    //---
     struct Ray
     {
         float3 Origin;
@@ -75,7 +75,7 @@ namespace RT
         __host__ __device__ float3 GetAt(float t) const { return Origin + Direction * t; }
     };
 
-    //-----------------------------------------------------------------------------------------------------------------
+    //---
     struct Camera
     {
         float3 Origin;
@@ -83,28 +83,52 @@ namespace RT
         float3 Horizontal;
         float3 Vertical;
 
-        // Default constructor!
+        //--- Store basis vectors to allow easy movement updates
+        float3 u, v, w;
+        float vFov, Aspect_ratio;
+
+        //--- Default constructor!
         __host__ __device__ Camera() {}
 
-        // Initialize Camera parameters on the Host (or Device if needed)
-        __host__ __device__ Camera(float3 lookfrom, float3 lookat, float3 vup, float vfov, float aspect_ratio)
+        //--- Parameterized constructor!
+        __host__ __device__ Camera(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
         {
-            float theta = vfov * 3.14159265358979323846f / 180.0f;
+            Init(lookfrom, lookat, vup, _vfov, _aspect_ratio);
+        }
+
+        //--- Initialize Camera parameters on the Host (or Device if needed) 
+        __host__ __device__ void Init(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
+    	{
+            Origin = lookfrom;
+            vFov = _vfov;
+            Aspect_ratio = _aspect_ratio;
+
+            float theta = vFov * 3.14159265358979323846f / 180.0f;
             float h = tanf(theta / 2.0f);
             float viewport_height = 2.0f * h;
-            float viewport_width = aspect_ratio * viewport_height;
+            float viewport_width = Aspect_ratio * viewport_height;
 
-            float3 w = unit_vector(lookfrom - lookat);
-            float3 u = unit_vector(cross(vup, w));
-            float3 v = cross(w, u);
+            // Calculate orthonormal basis
+            w = unit_vector(lookfrom - lookat); // Backward vector
+            u = unit_vector(cross(vup, w));     // Right vector
+            v = cross(w, u);                    // Up vector
 
-            Origin = lookfrom;
             Horizontal = u * viewport_width;
             Vertical = v * viewport_height;
             Lower_Left_Corner = Origin - Horizontal / 2.0f - Vertical / 2.0f - w;
         }
 
-        // get a Ray for UV coords
+        //--- Helper to move the camera
+		// 'w' is backward, so -w is forward
+        __host__ void move(float3 offset)
+    	{
+            Origin = Origin + offset;
+            // Re-calculate corners based on new origin (orientation stays same)
+            Lower_Left_Corner = Origin - Horizontal / 2.0f - Vertical / 2.0f - w;
+        }
+
+
+        //--- get a Ray for UV coords
         __host__ __device__ Ray GetRay(float u, float v)
         {
             return Ray(Origin, Lower_Left_Corner + Horizontal * u + Vertical * v - Origin);
@@ -113,4 +137,4 @@ namespace RT
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-extern "C" void RunRayTracingKernel(cudaGraphicsResource_t res, int cuWidth, int cuHeight, RT::Camera cam);
+extern "C" void RunRayTracingKernel(cudaGraphicsResource_t res, int cuWidth, int cuHeight, RT::Camera cam, float4* accumBuffer, int frameCount);
