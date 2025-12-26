@@ -9,3 +9,6 @@ https://github.com/user-attachments/assets/91af5b77-48d5-4f43-a0fc-2a9bd20f6ca7
 ## 3. Accumulation Buffer
 https://github.com/user-attachments/assets/0db4a820-0fcf-4d60-a2d6-209bc7146b24
 
+## 4. Sphere Rendering
+https://github.com/user-attachments/assets/64ec5c37-8349-42a3-b507-a7aeb686b810
+
