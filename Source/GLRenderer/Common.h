@@ -76,6 +76,54 @@ namespace RT
     };
 
     //---
+    struct HitRecord
+    {
+        float t;
+        float3 P;
+        float3 Normal;
+    };
+
+    //---
+    struct Sphere
+    {
+        float3 center;
+        float radius;
+        float3 color;
+
+        __device__ bool hit(const Ray& r, float t_min, float t_max, HitRecord& rec) const
+        {
+            const float3 oc = r.Origin - center;
+            const float a = dot(r.Direction, r.Direction);
+            const float b = 2.0f * dot(oc, r.Direction);
+            const float c = dot(oc, oc) - radius * radius;
+            const float discriminant = b * b - 4 * a * c;
+
+            if(discriminant > 0)
+            {
+                float temp = (-b - sqrtf(discriminant)) / a;
+                if (temp < t_max && temp > t_min)
+                {
+                    rec.t = temp;
+                    rec.P = r.GetAt(rec.t);
+                    rec.Normal = (rec.P - center) / radius;
+                    return true;
+                }
+
+                temp = (-b + sqrtf(discriminant)) / a;
+                if (temp < t_max && temp > t_min) 
+                {
+                    rec.t = temp;
+                    rec.P = r.GetAt(rec.t);
+                    rec.Normal = (rec.P - center) / radius;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    };
+
+    //---
     struct Camera
     {
         float3 Origin;
@@ -103,10 +151,10 @@ namespace RT
             vFov = _vfov;
             Aspect_ratio = _aspect_ratio;
 
-            float theta = vFov * 3.14159265358979323846f / 180.0f;
-            float h = tanf(theta / 2.0f);
-            float viewport_height = 2.0f * h;
-            float viewport_width = Aspect_ratio * viewport_height;
+            const float theta = vFov * 3.14159265358979323846f / 180.0f;
+            const float h = tanf(theta / 2.0f);
+            const float viewport_height = 2.0f * h;
+            const float viewport_width = Aspect_ratio * viewport_height;
 
             // Calculate orthonormal basis
             w = unit_vector(lookfrom - lookat); // Backward vector

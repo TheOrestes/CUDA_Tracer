@@ -15,14 +15,55 @@ __device__ inline float rand_float(curandState* state)
 //---------------------------------------------------------------------------------------------------------------------
 __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 {
-	float3 unit_direction = unit_vector(r.Direction);
+	const float3 unit_direction = unit_vector(r.Direction);
 	float t = 0.5f * (unit_direction.y + 1.0f);
 
+	//--- Enable this to visualize noise & accumulation!
+	//const float3 white = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
+	//const float3 blue = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
+
 	// Lerp: White (1,1,1) to Blue (0.5, 0.7, 1.0)
-	float3 white = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
-	float3 blue = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
+	const float3 white = make_float3(1, 1, 1);
+	const float3 blue = make_float3(0.5f, 0.7f, 1.0f);
 
 	return white * (1.0f - t) + blue * t;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec, float3& outColor)
+{
+	RT::HitRecord temp_rec;
+	bool hit_anything = false;
+	float closest_so_far = t_max;
+
+	// Define simple scene
+	const RT::Sphere spheres[] = 
+	{
+		{ make_float3(0.0f, 0.0f, -1.0f),    0.5f,   make_float3(1.0f, 0.0f, 0.0f) }, // Red Sphere
+		{ make_float3(0.0f, -100.5f, -1.0f), 100.0f, make_float3(0.0f, 1.0f, 0.0f) }  // Green Floor
+	};
+
+	constexpr int num_spheres = 2;
+
+	for (int i = 0; i < num_spheres; i++) 
+	{
+		if (spheres[i].hit(r, t_min, closest_so_far, temp_rec)) 
+		{
+			hit_anything = true;
+			closest_so_far = temp_rec.t;
+			rec = temp_rec;
+
+			// --- COLORING STRATEGY ---
+			// Option A: Use the sphere's flat color
+			outColor = spheres[i].color; 
+
+			// Option B: Normal Visualization (Rainbow colors based on curve)
+			// Maps normal [-1, 1] to color [0, 1]
+			//outColor = 0.5f * (rec.Normal + make_float3(1.0f, 1.0f, 1.0f));
+		}
+	}
+
+	return hit_anything;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -34,7 +75,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	if (x >= width || y >= height)  return;
 
 	// Initialize RNG per pixel
-	int pixelIndex = y * width + x;
+	const int pixelIndex = y * width + x;
 	curandState localState;
 	curand_init(1984 + pixelIndex, frameCount, 0, &localState);
 
@@ -45,9 +86,21 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	// 1. Generate Ray from Camera
 	RT::Ray r = cam.GetRay(u, v);
 
-	// 2. Calculate Color
-	float3 currentColor = GetMissColor(r, localState);
-	float4 currentColorRGBA = make_float4(currentColor.x, currentColor.y, currentColor.z, 1.0f);
+	RT::HitRecord rec;
+	float3 hitColor;
+	float3 currentColor;
+
+	// 2. Check Intersection & Calculate Color
+	if(HitWorld(r, 0.001f, 1000.0f, rec, hitColor))
+	{
+		currentColor = hitColor;
+	}
+	else
+	{
+		currentColor = GetMissColor(r, localState);
+	}
+
+	const float4 currentColorRGBA = make_float4(currentColor.x, currentColor.y, currentColor.z, 1.0f);
 
 	// Accumulation logic!
 	float4 finalColor;
@@ -61,7 +114,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	else
 	{
 		// subsequent frames = Blend!
-		float4 oldColor = accumBuffer[pixelIndex];
+		const float4 oldColor = accumBuffer[pixelIndex];
 
 		float n = float(frameCount);
 
