@@ -12,3 +12,6 @@ https://github.com/user-attachments/assets/0db4a820-0fcf-4d60-a2d6-209bc7146b24
 ## 4. Sphere Rendering
 https://github.com/user-attachments/assets/64ec5c37-8349-42a3-b507-a7aeb686b810
 
+## 5. Diffuse Illumination
+https://github.com/user-attachments/assets/d4c71d09-b7e8-4e5d-894c-dbe8c18a38be
+
