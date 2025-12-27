@@ -81,6 +81,7 @@ namespace RT
         float t;
         float3 P;
         float3 Normal;
+        float3 Albedo;
     };
 
     //---
@@ -100,21 +101,23 @@ namespace RT
 
             if(discriminant > 0)
             {
-                float temp = (-b - sqrtf(discriminant)) / a;
+                float temp = (-b - sqrtf(discriminant)) / (2.0f * a);
                 if (temp < t_max && temp > t_min)
                 {
                     rec.t = temp;
                     rec.P = r.GetAt(rec.t);
                     rec.Normal = (rec.P - center) / radius;
+                    rec.Albedo = color;
                     return true;
                 }
 
-                temp = (-b + sqrtf(discriminant)) / a;
+                temp = (-b + sqrtf(discriminant)) / (2.0f *a);
                 if (temp < t_max && temp > t_min) 
                 {
                     rec.t = temp;
                     rec.P = r.GetAt(rec.t);
                     rec.Normal = (rec.P - center) / radius;
+                    rec.Albedo = color;
                     return true;
                 }
             }

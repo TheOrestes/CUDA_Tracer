@@ -4,12 +4,45 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <device_launch_parameters.h>
+#include <iomanip>
 
 //---------------------------------------------------------------------------------------------------------------------
 // --- Helper: Random float in [0, 1] ---
-__device__ inline float rand_float(curandState* state)
+__device__ inline float RandomFloat(curandState* state)
 {
 	return curand_uniform(state);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Rejection method to find a random point in unit sphere
+__device__ float3 RandomVectorInUnitSphere(curandState* state)
+{
+	float3 p;
+
+	do 
+	{
+		p = 2.0f * make_float3(RandomFloat(state), RandomFloat(state), RandomFloat(state)) - make_float3(1, 1, 1);
+	}
+	while (dot(p, p) >= 1.0f);
+
+	return p;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ float3 GetHeatmapColor(float t)
+{
+	// t is 0.0 (Cheap) to 1.0 (Expensive)
+	// Simple Blue -> Green -> Red gradient
+	if (t < 0.5f) 
+	{
+		// Blue to Green
+		return (1.0f - 2.0f * t) * make_float3(0, 0, 1) + (2.0f * t) * make_float3(0, 1, 0);
+	}
+	else 
+	{
+		// Green to Red
+		return (1.0f - 2.0f * (t - 0.5f)) * make_float3(0, 1, 0) + (2.0f * (t - 0.5f)) * make_float3(1, 0, 0);
+	}
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -19,8 +52,8 @@ __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 	float t = 0.5f * (unit_direction.y + 1.0f);
 
 	//--- Enable this to visualize noise & accumulation!
-	//const float3 white = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
-	//const float3 blue = make_float3(rand_float(&state), rand_float(&state), rand_float(&state));
+	//const float3 white = make_float3(RandomFloat(&state), RandomFloat(&state), RandomFloat(&state));
+	//const float3 blue = make_float3(RandomFloat(&state), RandomFloat(&state), RandomFloat(&state));
 
 	// Lerp: White (1,1,1) to Blue (0.5, 0.7, 1.0)
 	const float3 white = make_float3(1, 1, 1);
@@ -30,7 +63,7 @@ __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec, float3& outColor)
+__device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec)
 {
 	RT::HitRecord temp_rec;
 	bool hit_anything = false;
@@ -39,8 +72,8 @@ __device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitReco
 	// Define simple scene
 	const RT::Sphere spheres[] = 
 	{
-		{ make_float3(0.0f, 0.0f, -1.0f),    0.5f,   make_float3(1.0f, 0.0f, 0.0f) }, // Red Sphere
-		{ make_float3(0.0f, -100.5f, -1.0f), 100.0f, make_float3(0.0f, 1.0f, 0.0f) }  // Green Floor
+		{ make_float3(0.0f, 0.0f, -1.0f),    0.5f,   make_float3(0.1f, 0.2f, 0.5f) }, // Red Sphere
+		{ make_float3(0.0f, -100.5f, -1.0f), 100.0f, make_float3(0.8f, 0.8f, 0.0f) }  // Green Floor
 	};
 
 	constexpr int num_spheres = 2;
@@ -52,14 +85,6 @@ __device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitReco
 			hit_anything = true;
 			closest_so_far = temp_rec.t;
 			rec = temp_rec;
-
-			// --- COLORING STRATEGY ---
-			// Option A: Use the sphere's flat color
-			outColor = spheres[i].color; 
-
-			// Option B: Normal Visualization (Rainbow colors based on curve)
-			// Maps normal [-1, 1] to color [0, 1]
-			//outColor = 0.5f * (rec.Normal + make_float3(1.0f, 1.0f, 1.0f));
 		}
 	}
 
@@ -80,27 +105,44 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	curand_init(1984 + pixelIndex, frameCount, 0, &localState);
 
 	// Normalized coordinates
-	float u = (float(x) + rand_float(&localState)) / float(width - 1);
-	float v = (float(y) + rand_float(&localState)) / float(height - 1);
+	float u = (float(x) + RandomFloat(&localState)) / float(width - 1);
+	float v = (float(y) + RandomFloat(&localState)) / float(height - 1);
 
 	// 1. Generate Ray from Camera
 	RT::Ray r = cam.GetRay(u, v);
+	float3 currentColor = make_float3(1, 1, 1);
+	float3 pixelColor = make_float3(0, 0, 0);
 
-	RT::HitRecord rec;
-	float3 hitColor;
-	float3 currentColor;
-
-	// 2. Check Intersection & Calculate Color
-	if(HitWorld(r, 0.001f, 1000.0f, rec, hitColor))
+	// Iterative Bounce Loop (Recursion Depth = 50)
+	for (int depth = 0 ; depth < 50 ; ++depth)
 	{
-		currentColor = hitColor;
-	}
-	else
-	{
-		currentColor = GetMissColor(r, localState);
+		RT::HitRecord rec;
+
+		// 2. Check Intersection & Calculate Color
+		if (HitWorld(r, 0.001f, 1000.0f, rec))
+		{
+			// YES: We hit a diffuse object.
+
+			// --- SCATTER LOGIC ---
+		   // Target = HitPoint + Normal + RandomUnitVector
+		   // This approximates Lambertian distribution
+			float3 target = rec.P + rec.Normal + RandomVectorInUnitSphere(&localState);
+
+			// Update Ray: Start from HitPoint, go towards Target
+			r = RT::Ray(rec.P, target - rec.P);
+
+			currentColor = currentColor * rec.Albedo;
+		}
+		else
+		{
+			// NO: We hit the sky (Light Source)
+			pixelColor = currentColor * GetMissColor(r, localState);
+			break;
+		}
 	}
 
-	const float4 currentColorRGBA = make_float4(currentColor.x, currentColor.y, currentColor.z, 1.0f);
+
+	const float4 pixelColorRGBA = make_float4(pixelColor.x, pixelColor.y, pixelColor.z, 1.0f);
 
 	// Accumulation logic!
 	float4 finalColor;
@@ -108,7 +150,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	if(frameCount == 1)
 	{
 		// First frame, just save the current color!
-		finalColor = currentColorRGBA;
+		finalColor = pixelColorRGBA;
 		accumBuffer[pixelIndex] = finalColor;
 	}
 	else
@@ -118,9 +160,9 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 
 		float n = float(frameCount);
 
-		finalColor.x = oldColor.x + (currentColorRGBA.x - oldColor.x) / n;
-		finalColor.y = oldColor.y + (currentColorRGBA.y - oldColor.y) / n;
-		finalColor.z = oldColor.z + (currentColorRGBA.z - oldColor.z) / n;
+		finalColor.x = oldColor.x + (pixelColorRGBA.x - oldColor.x) / n;
+		finalColor.y = oldColor.y + (pixelColorRGBA.y - oldColor.y) / n;
+		finalColor.z = oldColor.z + (pixelColorRGBA.z - oldColor.z) / n;
 		finalColor.w = 1.0f;
 
 		// store back to buffer
