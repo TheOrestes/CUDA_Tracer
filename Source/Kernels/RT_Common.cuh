@@ -1,7 +1,10 @@
 #pragma once
 
+#include <corecrt_math.h>
 #include <cuda_runtime.h>
-#include <cmath>
+#include <vector_types.h>
+
+#define RT_PI 3.14159265358979323846f
 
 //-----------------------------------------------------------------------------------------------------------------
 __host__ __device__ inline float3 operator+(const float3& a, const float3& b)
@@ -54,7 +57,7 @@ __host__ __device__ inline float3 cross(const float3& a, const float3& b)
 //-----------------------------------------------------------------------------------------------------------------
 __host__ __device__ inline float3 unit_vector(const float3& v)
 {
-    float len = sqrtf(dot(v, v));
+	const float len = sqrtf(dot(v, v));
     return make_float3(v.x / len, v.y / len, v.z / len);
 }
 
@@ -68,21 +71,71 @@ namespace RT
         float3 Direction;
 
         __host__ __device__ Ray() {}
-
-        __host__ __device__ Ray(const float3& o, const float3& d)
-	        : Origin(o), Direction(d) { }
-
+        __host__ __device__ Ray(const float3& o, const float3& d) : Origin(o), Direction(d) {}
         __host__ __device__ float3 GetAt(float t) const { return Origin + Direction * t; }
     };
 
     //---
     struct HitRecord
     {
-        float t;
-        float3 P;
-        float3 Normal;
-        float3 Albedo;
+        float   t;
+        float3  P;
+        float3  Normal;
+        float2  UV;
+        int     MaterialID;
     };
+
+    enum ObjectType
+    {
+        SPHERE,
+        MESH
+    };
+
+    struct SphereData
+    {
+        float3 center;
+        float radius;
+    };
+
+    struct TriangleData
+    {
+        float3 V0, V1, V2;
+        float2 UV0, UV1, UV2;
+        float3 Normal;
+    };
+
+    struct SceneObject
+    {
+        ObjectType type;
+        int MaterialID;
+
+        union
+        {
+            SphereData sphere;
+            TriangleData triangle;
+        };
+
+        // Default Hit function!
+        __device__ bool Hit(const Ray& r, float tMin, float tMax, HitRecord& rec) const;
+    };
+
+    enum MaterialType
+    {
+        LAMBERTIAN,
+        METAL,
+        PHONG,
+        TRANSPARENT
+    };
+
+    struct Material
+    {
+        MaterialType type;
+        float3 Albedo;
+        float Fuzz;
+        float IoR;
+    };
+
+
 
     //---
     struct Sphere
@@ -90,40 +143,6 @@ namespace RT
         float3 center;
         float radius;
         float3 color;
-
-        __device__ bool hit(const Ray& r, float t_min, float t_max, HitRecord& rec) const
-        {
-            const float3 oc = r.Origin - center;
-            const float a = dot(r.Direction, r.Direction);
-            const float b = 2.0f * dot(oc, r.Direction);
-            const float c = dot(oc, oc) - radius * radius;
-            const float discriminant = b * b - 4 * a * c;
-
-            if(discriminant > 0)
-            {
-                float temp = (-b - sqrtf(discriminant)) / (2.0f * a);
-                if (temp < t_max && temp > t_min)
-                {
-                    rec.t = temp;
-                    rec.P = r.GetAt(rec.t);
-                    rec.Normal = (rec.P - center) / radius;
-                    rec.Albedo = color;
-                    return true;
-                }
-
-                temp = (-b + sqrtf(discriminant)) / (2.0f *a);
-                if (temp < t_max && temp > t_min) 
-                {
-                    rec.t = temp;
-                    rec.P = r.GetAt(rec.t);
-                    rec.Normal = (rec.P - center) / radius;
-                    rec.Albedo = color;
-                    return true;
-                }
-            }
-
-            return false;
-        }
     };
 
     //---
@@ -139,17 +158,11 @@ namespace RT
         float vFov, Aspect_ratio;
 
         //--- Default constructor!
-        __host__ __device__ Camera() {}
-
-        //--- Parameterized constructor!
-        __host__ __device__ Camera(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
-        {
-            Init(lookfrom, lookat, vup, _vfov, _aspect_ratio);
-        }
+        __host__ Camera() {}
 
         //--- Initialize Camera parameters on the Host (or Device if needed) 
-        __host__ __device__ void Init(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
-    	{
+        __host__ void Init(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
+        {
             Origin = lookfrom;
             vFov = _vfov;
             Aspect_ratio = _aspect_ratio;
@@ -170,17 +183,16 @@ namespace RT
         }
 
         //--- Helper to move the camera
-		// 'w' is backward, so -w is forward
+        // 'w' is backward, so -w is forward
         __host__ void move(float3 offset)
-    	{
+        {
             Origin = Origin + offset;
             // Re-calculate corners based on new origin (orientation stays same)
             Lower_Left_Corner = Origin - Horizontal / 2.0f - Vertical / 2.0f - w;
         }
 
-
         //--- get a Ray for UV coords
-        __host__ __device__ Ray GetRay(float u, float v)
+        __device__ Ray GetRay(float u, float v)
         {
             return Ray(Origin, Lower_Left_Corner + Horizontal * u + Vertical * v - Origin);
         }
@@ -188,4 +200,4 @@ namespace RT
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-extern "C" void RunRayTracingKernel(cudaGraphicsResource_t res, int cuWidth, int cuHeight, RT::Camera cam, float4* accumBuffer, int frameCount);
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials);

@@ -135,10 +135,10 @@
     <ClCompile Include="Source\GLRenderer\Main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\GLRenderer\Common.h" />
+    <CudaCompile Include="Source\Kernels\RT_Common.cuh" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="Source\Kernels\Kernels.cu" />
+    <CudaCompile Include="Source\Kernels\RT_Kernel.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

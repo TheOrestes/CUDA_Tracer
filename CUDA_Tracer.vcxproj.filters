@@ -20,11 +20,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\GLRenderer\Common.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <CudaCompile Include="Source\Kernels\Kernels.cu" />
+    <CudaCompile Include="Source\Kernels\RT_Kernel.cu" />
+    <CudaCompile Include="Source\Kernels\RT_Common.cuh" />
   </ItemGroup>
 </Project>

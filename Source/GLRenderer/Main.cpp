@@ -1,14 +1,20 @@
 // CUDA_Tracer.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
-#include <iostream>
+#define WIN32_LEAN_AND_MEAN
+
 #define GLEW_STATIC
 #include "GL/glew.h"
 #include "GLFW/glfw3.h"
 
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 #include <cuda_gl_interop.h>
 
-#include "GLRenderer/Common.h"
+#include <vector>
+#include <iostream>
+
+#include "Kernels/RT_Common.cuh"
 
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
@@ -18,6 +24,9 @@ constexpr int width = 600;
 constexpr int height = 450;
 
 RT::Camera gCamera;
+RT::SceneObject* dSceneObject = nullptr;
+RT::Material* dMaterial = nullptr;
+int gNumObjects = 0;
 
 // Input State
 bool keys[1024] = { false };
@@ -26,7 +35,8 @@ bool keys[1024] = { false };
 // Helper to check CUDA errors
 void checkCudaError(cudaError_t err, const char* msg)
 {
-	if (err != cudaSuccess) {
+	if (err != cudaSuccess) 
+	{
 		std::cerr << "CUDA Error (" << msg << "): " << cudaGetErrorString(err) << std::endl;
 		exit(EXIT_FAILURE);
 	}
@@ -154,6 +164,43 @@ bool ProcessInput(float dt)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void SetupScene()
+{
+	std::vector<RT::SceneObject> sceneObjects;
+
+	// Sphere
+	RT::SceneObject smallSphere;
+	smallSphere.type = RT::SPHERE;
+	smallSphere.MaterialID = 0;
+	smallSphere.sphere.center = make_float3(0, 0, -1);
+	smallSphere.sphere.radius = 0.5f;
+
+	sceneObjects.push_back(smallSphere);
+
+	// Big Sphere
+	RT::SceneObject bigSphere;
+	bigSphere.type = RT::SPHERE;
+	bigSphere.MaterialID = 1;
+	bigSphere.sphere.center = make_float3(0.0f, -100.5f, -1.0f);
+	bigSphere.sphere.radius = 100.0f;
+
+	sceneObjects.push_back(bigSphere);
+	gNumObjects = static_cast<int>(sceneObjects.size());
+
+	// Materials
+	std::vector<RT::Material> mats;
+	mats.push_back({RT::LAMBERTIAN, {0.8f, 0.8f, 0.0f}, 0.0f }); // small sphere
+	mats.push_back({RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f }); // big sphere
+
+
+	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
+	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
+
+	cudaMalloc(&dMaterial, mats.size() * sizeof(RT::Material));
+	cudaMemcpy(dMaterial, mats.data(), mats.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 int main()
 {
 	InitGLFW();
@@ -182,6 +229,8 @@ int main()
 	// Initialize Scene!
 	gCamera.Init(make_float3(0, 0, 2), make_float3(0, 0, -1), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
 
+	SetupScene();
+
 	float deltaTime = 0.0f;
 	float lastFrameTime = 0.0f;
 	int frameCount = 0;				// Accumulation counter!
@@ -207,7 +256,7 @@ int main()
 		frameCount++;
 
 		// Run CUDA kernel!
-		RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, frameCount);
+		RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, frameCount, dSceneObject, gNumObjects, dMaterial);
 
 		// Bind the FBO as the "Read" source
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);

@@ -1,10 +1,7 @@
 
-#include "GLRenderer/Common.h"
-
-#include <cuda_runtime.h>
+#include "RT_Common.cuh"
 #include <curand_kernel.h>
 #include <device_launch_parameters.h>
-#include <iomanip>
 
 //---------------------------------------------------------------------------------------------------------------------
 // --- Helper: Random float in [0, 1] ---
@@ -19,11 +16,10 @@ __device__ float3 RandomVectorInUnitSphere(curandState* state)
 {
 	float3 p;
 
-	do 
+	do
 	{
 		p = 2.0f * make_float3(RandomFloat(state), RandomFloat(state), RandomFloat(state)) - make_float3(1, 1, 1);
-	}
-	while (dot(p, p) >= 1.0f);
+	} while (dot(p, p) >= 1.0f);
 
 	return p;
 }
@@ -49,7 +45,7 @@ __device__ float3 GetHeatmapColor(float t)
 __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 {
 	const float3 unit_direction = unit_vector(r.Direction);
-	float t = 0.5f * (unit_direction.y + 1.0f);
+	const float t = 0.5f * (unit_direction.y + 1.0f);
 
 	//--- Enable this to visualize noise & accumulation!
 	//const float3 white = make_float3(RandomFloat(&state), RandomFloat(&state), RandomFloat(&state));
@@ -63,24 +59,81 @@ __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec)
+__device__ bool HitSphere(const RT::SphereData& s, const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec) 
+{
+	const float3 oc = r.Origin - s.center;
+	const float a = dot(r.Direction, r.Direction);
+	const float b = 2.0f * dot(oc, r.Direction);
+	const float c = dot(oc, oc) - s.radius * s.radius;
+	const float discriminant = b * b - 4 * a * c;
+
+	if (discriminant > 0)
+	{
+		float temp = (-b - sqrtf(discriminant)) / (2.0f * a);
+		if (temp < t_max && temp > t_min)
+		{
+			rec.t = temp;
+			rec.P = r.GetAt(rec.t);
+			rec.Normal = (rec.P - s.center) / s.radius;
+
+			const float phi = atan2(rec.Normal.z, rec.Normal.x);
+			const float theta = asin(rec.Normal.y);
+
+			rec.UV.x = 1.0f - (phi + RT_PI) / (2.0f * RT_PI);
+			rec.UV.y = (theta + RT_PI / 2.0f) / RT_PI;
+
+			return true;
+		}
+
+		temp = (-b + sqrtf(discriminant)) / (2.0f * a);
+		if (temp < t_max && temp > t_min)
+		{
+			rec.t = temp;
+			rec.P = r.GetAt(rec.t);
+			rec.Normal = (rec.P - s.center) / s.radius;
+
+			const float phi = atan2(rec.Normal.z, rec.Normal.x);
+			const float theta = asin(rec.Normal.y);
+
+			rec.UV.x = 1.0f - (phi + RT_PI) / (2.0f * RT_PI);
+			rec.UV.y = (theta + RT_PI / 2.0f) / RT_PI;
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool HitObject(const RT::SceneObject& obj, RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec)
+{
+	bool hit = false;
+
+	switch (obj.type)
+	{
+	case RT::SPHERE:
+		hit = HitSphere(obj.sphere, r, t_min, t_max, rec);
+		break;
+	}
+
+	if (hit)
+		rec.MaterialID = obj.MaterialID;
+
+	return hit;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool HitWorld(RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec, RT::SceneObject* objects, int numObjects)
 {
 	RT::HitRecord temp_rec;
 	bool hit_anything = false;
 	float closest_so_far = t_max;
 
-	// Define simple scene
-	const RT::Sphere spheres[] = 
+	// Iterate through all the scene objects!
+	for (int i = 0; i < numObjects; i++) 
 	{
-		{ make_float3(0.0f, 0.0f, -1.0f),    0.5f,   make_float3(0.1f, 0.2f, 0.5f) }, // Red Sphere
-		{ make_float3(0.0f, -100.5f, -1.0f), 100.0f, make_float3(0.8f, 0.8f, 0.0f) }  // Green Floor
-	};
-
-	constexpr int num_spheres = 2;
-
-	for (int i = 0; i < num_spheres; i++) 
-	{
-		if (spheres[i].hit(r, t_min, closest_so_far, temp_rec)) 
+		if (HitObject(objects[i], r, t_min, closest_so_far, temp_rec)) 
 		{
 			hit_anything = true;
 			closest_so_far = temp_rec.t;
@@ -92,7 +145,7 @@ __device__ bool HitWorld(const RT::Ray& r, float t_min, float t_max, RT::HitReco
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, int frameCount, float4* accumBuffer)
+__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -119,19 +172,37 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		RT::HitRecord rec;
 
 		// 2. Check Intersection & Calculate Color
-		if (HitWorld(r, 0.001f, 1000.0f, rec))
+		if (HitWorld(r, 0.001f, 1000.0f, rec, pObjects, numObject))
 		{
-			// YES: We hit a diffuse object.
+			// Fetch material data from the gloabl memory
+			RT::Material material = pMaterials[rec.MaterialID];
 
-			// --- SCATTER LOGIC ---
-		   // Target = HitPoint + Normal + RandomUnitVector
-		   // This approximates Lambertian distribution
-			float3 target = rec.P + rec.Normal + RandomVectorInUnitSphere(&localState);
+			switch (material.type)
+			{
+				case RT::LAMBERTIAN:
+				{
+					float3 target = rec.P + rec.Normal + RandomVectorInUnitSphere(&localState);
+					r = RT::Ray(rec.P, target - rec.P);
+					currentColor = currentColor * material.Albedo;
 
-			// Update Ray: Start from HitPoint, go towards Target
-			r = RT::Ray(rec.P, target - rec.P);
+					break;
+				}
 
-			currentColor = currentColor * rec.Albedo;
+				case RT::METAL:
+				{
+					break;
+				}
+
+				case RT::PHONG:
+				{
+					break;
+				}
+
+				case RT::TRANSPARENT:
+				{
+					break;
+				}
+			}
 		}
 		else
 		{
@@ -151,12 +222,12 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	{
 		// First frame, just save the current color!
 		finalColor = pixelColorRGBA;
-		accumBuffer[pixelIndex] = finalColor;
+		pAccumBuffer[pixelIndex] = finalColor;
 	}
 	else
 	{
 		// subsequent frames = Blend!
-		const float4 oldColor = accumBuffer[pixelIndex];
+		const float4 oldColor = pAccumBuffer[pixelIndex];
 
 		float n = float(frameCount);
 
@@ -166,7 +237,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		finalColor.w = 1.0f;
 
 		// store back to buffer
-		accumBuffer[pixelIndex] = finalColor;
+		pAccumBuffer[pixelIndex] = finalColor;
 	}
 
 	// can do gamma correction here if required!
@@ -182,7 +253,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* accumBuffer, int frameCount)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -206,7 +277,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer << <blocksPerGrid, threadsPerBlock>> > (surface, cuWidth, cuHeight, camera, frameCount, accumBuffer);
+	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, frameCount, pObjects, numObjects, pMaterials);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);
