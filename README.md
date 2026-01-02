@@ -15,3 +15,6 @@ https://github.com/user-attachments/assets/64ec5c37-8349-42a3-b507-a7aeb686b810
 ## 5. Diffuse Illumination
 https://github.com/user-attachments/assets/d4c71d09-b7e8-4e5d-894c-dbe8c18a38be
 
+## 6. Metal Surface with Roughness
+https://github.com/user-attachments/assets/16ef531d-5107-4007-bc36-2d4f729e4684
+
