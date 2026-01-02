@@ -11,6 +11,12 @@ __device__ inline float RandomFloat(curandState* state)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+__device__ inline float3 Reflect(const float3& V, const float3& N)
+{
+	return V - 2.0f * dot(V, N) * N;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Rejection method to find a random point in unit sphere
 __device__ float3 RandomVectorInUnitSphere(curandState* state)
 {
@@ -190,6 +196,18 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 
 				case RT::METAL:
 				{
+					float3 reflected = Reflect(unit_vector(r.Direction), rec.Normal);
+
+					// Add Fuzziness (roughness) to the reflection
+					float3 scattered = reflected + material.Fuzz * RandomVectorInUnitSphere(&localState);
+
+					// only scatter if reflection isn't absorbed
+					if(dot(scattered, rec.Normal) > 0.0f)
+					{
+						r = RT::Ray(rec.P, scattered);
+						currentColor = currentColor * material.Albedo;
+					}
+
 					break;
 				}
 

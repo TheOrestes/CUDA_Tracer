@@ -171,27 +171,47 @@ void SetupScene()
 	// Sphere
 	RT::SceneObject smallSphere;
 	smallSphere.type = RT::SPHERE;
-	smallSphere.MaterialID = 0;
+	smallSphere.MaterialID = 0;				// This index is look-up into the Materials list defined below!
 	smallSphere.sphere.center = make_float3(0, 0, -1);
 	smallSphere.sphere.radius = 0.5f;
 
 	sceneObjects.push_back(smallSphere);
 
-	// Big Sphere
-	RT::SceneObject bigSphere;
-	bigSphere.type = RT::SPHERE;
-	bigSphere.MaterialID = 1;
-	bigSphere.sphere.center = make_float3(0.0f, -100.5f, -1.0f);
-	bigSphere.sphere.radius = 100.0f;
+	// Ground Sphere
+	RT::SceneObject groundSphere;
+	groundSphere.type = RT::SPHERE;
+	groundSphere.MaterialID = 1;
+	groundSphere.sphere.center = make_float3(0.0f, -100.5f, -1.0f);
+	groundSphere.sphere.radius = 100.0f;
 
-	sceneObjects.push_back(bigSphere);
+	sceneObjects.push_back(groundSphere);
+
+	// Left Sphere
+	RT::SceneObject leftSphere;
+	leftSphere.type = RT::SPHERE;
+	leftSphere.MaterialID = 2;
+	leftSphere.sphere.center = make_float3(-1.2f, 0, -1.0f);
+	leftSphere.sphere.radius = 0.5f;
+
+	sceneObjects.push_back(leftSphere);
+
+	// Right Sphere
+	RT::SceneObject rightSphere;
+	rightSphere.type = RT::SPHERE;
+	rightSphere.MaterialID = 3;
+	rightSphere.sphere.center = make_float3(1.2f, 0, -1.0f);
+	rightSphere.sphere.radius = 0.5f;
+
+	sceneObjects.push_back(rightSphere);
+
 	gNumObjects = static_cast<int>(sceneObjects.size());
 
 	// Materials
 	std::vector<RT::Material> mats;
-	mats.push_back({RT::LAMBERTIAN, {0.8f, 0.8f, 0.0f}, 0.0f }); // small sphere
-	mats.push_back({RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f }); // big sphere
-
+	mats.push_back({RT::LAMBERTIAN, {0.8f, 0.8f, 0.0f}, 0.0f, 0.0f });	// small sphere
+	mats.push_back({RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f, 0.0f });	// ground sphere
+	mats.push_back({ RT::METAL,{0.2f, 0.2f, 0.7f}, 0.0f, 0.0f });		// left shiny sphere
+	mats.push_back({ RT::METAL,{0.7f, 0.2f, 0.2f}, 0.3f, 0.0f });		// right fuzzy sphere
 
 	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
 	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
