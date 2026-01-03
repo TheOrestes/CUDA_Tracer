@@ -20,16 +20,24 @@
 GLFWwindow* window = nullptr;
 float4* gAccumulationBuffer = nullptr;
 
+// Window Settings globals
 constexpr int width = 600;
 constexpr int height = 450;
 
+// Scene globals
 RT::Camera gCamera;
 RT::SceneObject* dSceneObject = nullptr;
 RT::Material* dMaterial = nullptr;
 int gNumObjects = 0;
 
-// Input State
+// Input State globals
 bool keys[1024] = { false };
+bool rightMousePressed = false;
+bool cameraRotated = false;
+double lastMouseX = 0.0;
+double lastMouseY = 0.0;
+bool firstMouse = true;
+constexpr float mouseSensitivity = 0.003f; // Adjust for faster/slower rotation
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -96,6 +104,51 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// 3. Mouse button callback
+void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_RIGHT)
+	{
+		if (action == GLFW_PRESS)
+		{
+			rightMousePressed = true;
+			firstMouse = true; // Reset to avoid jump on first move
+			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // Hide cursor
+		}
+		else if (action == GLFW_RELEASE)
+		{
+			rightMousePressed = false;
+			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // Show cursor
+		}
+	}
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// 3. Mouse movement callback
+void MouseCallback(GLFWwindow* window, double xpos, double ypos)
+{
+	if (!rightMousePressed) return;
+
+	if (firstMouse)
+	{
+		lastMouseX = xpos;
+		lastMouseY = ypos;
+		firstMouse = false;
+		return;
+	}
+
+	const double xoffset = xpos - lastMouseX;
+	const double yoffset = lastMouseY - ypos; // Reversed: y increases downward
+
+	lastMouseX = xpos;
+	lastMouseY = ypos;
+
+	gCamera.Rotate(static_cast<float>(xoffset) * mouseSensitivity, static_cast<float>(yoffset) * mouseSensitivity);
+
+	cameraRotated = true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // 4. Create GL texture & register with CUDA!
 void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
 {
@@ -131,33 +184,37 @@ void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
 bool ProcessInput(float dt)
 {
 	bool moved = false;
-
 	const float cameraSpeed = 2.5f * dt; // Adjust speed as needed
 
-	// We need the camera's basis vectors to move relative to view
-	// Forward is -w, Right is u, Up is v (or global up {0,1,0})
-	const float3 forward = gCamera.w * -1.0f;
+	// Camera-relative movement vectors
+	const float3 forward = -gCamera.w;
 	const float3 right = gCamera.u;
-	constexpr float3 up = { 0.0f, 1.0f, 0.0f }; // Keep movement parallel to ground? Or use g_camera.v for free-fly
+	const float3 up = gCamera.v; // Use camera's up for true free-fly
 
 	float3 movement = { 0.0f, 0.0f, 0.0f };
 
+	// Movement
 	if (keys[GLFW_KEY_W]) movement = movement + forward * cameraSpeed;
 	if (keys[GLFW_KEY_S]) movement = movement - forward * cameraSpeed;
 	if (keys[GLFW_KEY_A]) movement = movement - right * cameraSpeed;
 	if (keys[GLFW_KEY_D]) movement = movement + right * cameraSpeed;
 
-	// Optional: Q/E for Up/Down
-	if (keys[GLFW_KEY_E]) movement = movement + up * cameraSpeed;
-	if (keys[GLFW_KEY_Q]) movement = movement - up * cameraSpeed;
+	// Vertical movement
+	if (keys[GLFW_KEY_E]) movement = movement + make_float3(0, 1, 0) * cameraSpeed;
+	if (keys[GLFW_KEY_Q]) movement = movement - make_float3(0, 1, 0) * cameraSpeed;
 
 	// Apply movement
-	// Note: We only update origin, assuming orientation (lookAt direction) stays locked for now
-	// For full FPS controls, you'd need to rotate the basis vectors too.
 	if (dot(movement, movement) > 0.0f) 
 	{
 		gCamera.move(movement);
 		moved = true;
+	}
+
+	// check if camera rotated
+	if(cameraRotated)
+	{
+		moved = true;
+		cameraRotated = false;
 	}
 
 	return moved;
@@ -226,7 +283,9 @@ int main()
 	InitGLFW();
 	InitGLEW();
 
-	glfwSetKeyCallback(window, KeyHandler);
+	glfwSetKeyCallback(window, KeyHandler);							// Keyboard callback
+	glfwSetMouseButtonCallback(window, MouseButtonCallback);		// Mouse button callback
+	glfwSetCursorPosCallback(window, MouseCallback);				// Mouse movement callback
 
 	GLuint fbTexture;
 	cudaGraphicsResource_t fbCudaResource;

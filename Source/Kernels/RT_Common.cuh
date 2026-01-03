@@ -163,8 +163,11 @@ namespace RT
         float3 u, v, w;
         float vFov, Aspect_ratio;
 
+        // Rotation angles in radians!
+        float yaw, pitch;
+
         //--- Default constructor!
-        __host__ Camera() {}
+        __host__ Camera(): yaw(0.0f), pitch(0.0f) {}
 
         //--- Initialize Camera parameters on the Host (or Device if needed) 
         __host__ void Init(float3 lookfrom, float3 lookat, float3 vup, float _vfov, float _aspect_ratio)
@@ -173,15 +176,33 @@ namespace RT
             vFov = _vfov;
             Aspect_ratio = _aspect_ratio;
 
+            // Calculate initial yaw and pitch from lookfrom -> lookat direction
+            const float3 direction = unit_vector(lookat - lookfrom);
+            yaw = atan2f(direction.x, -direction.z);
+            pitch = asinf(direction.y);
+
+            UpdateVectors();
+        }
+
+        //--- Update camera vectors based on yaw and pitch
+        __host__ void UpdateVectors()
+        {
+            float3 forward;
+            forward.x = sinf(yaw) * cosf(pitch);
+            forward.y = sinf(pitch);
+            forward.z = -cosf(yaw) * cosf(pitch);
+            forward = unit_vector(forward);
+
+            // calculate basis vectors
+            w = -forward;                                       // backward vector
+            u = unit_vector(cross(make_float3(0, 1, 0), w));    // right vector
+            v = cross(w, u);
+
+            // Update viewport based on new orientation
             const float theta = vFov * 3.14159265358979323846f / 180.0f;
             const float h = tanf(theta / 2.0f);
             const float viewport_height = 2.0f * h;
             const float viewport_width = Aspect_ratio * viewport_height;
-
-            // Calculate orthonormal basis
-            w = unit_vector(lookfrom - lookat); // Backward vector
-            u = unit_vector(cross(vup, w));     // Right vector
-            v = cross(w, u);                    // Up vector
 
             Horizontal = u * viewport_width;
             Vertical = v * viewport_height;
@@ -195,6 +216,20 @@ namespace RT
             Origin = Origin + offset;
             // Re-calculate corners based on new origin (orientation stays same)
             Lower_Left_Corner = Origin - Horizontal / 2.0f - Vertical / 2.0f - w;
+        }
+
+        //--- Rotate camera by delta angles (in radians)
+        __host__ void Rotate(float delta_yaw, float delta_pitch)
+        {
+            yaw += delta_yaw;
+            pitch += delta_pitch;
+
+            // Clamp pitch to avoid gimbal lock
+            constexpr float max_pitch = 1.553343f; // ~89 degrees
+            if (pitch > max_pitch) pitch = max_pitch;
+            if (pitch < -max_pitch) pitch = -max_pitch;
+
+            UpdateVectors();
         }
 
         //--- get a Ray for UV coords
