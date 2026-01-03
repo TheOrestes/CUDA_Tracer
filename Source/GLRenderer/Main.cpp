@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cuda_gl_interop.h>
+#include <iomanip>
 
 #include <vector>
 #include <iostream>
@@ -29,6 +30,11 @@ RT::Camera gCamera;
 RT::SceneObject* dSceneObject = nullptr;
 RT::Material* dMaterial = nullptr;
 int gNumObjects = 0;
+
+// Render settings globals
+bool accumulationComplete = false;
+int currentSPP = 0;
+constexpr int targetSPP = 100;
 
 // Input State globals
 bool keys[1024] = { false };
@@ -312,7 +318,6 @@ int main()
 
 	float deltaTime = 0.0f;
 	float lastFrameTime = 0.0f;
-	int frameCount = 0;				// Accumulation counter!
 
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
@@ -327,15 +332,32 @@ int main()
 		// If camera has moved, then RESET the accumulation! 
 		if (cameraMoved)
 		{
-			frameCount = 0;
+			currentSPP = 0;
+			accumulationComplete = false;
 			cudaMemset(gAccumulationBuffer, 0, bufferSize);
 		}
 
-		// Increment frame counter, affects RNG seed!
-		frameCount++;
+		if(!accumulationComplete)
+		{
+			++currentSPP;
 
-		// Run CUDA kernel!
-		RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, frameCount, dSceneObject, gNumObjects, dMaterial);
+			// Run CUDA kernel!
+			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial);
+
+			// Print progress every 1/10th step...
+			if (currentSPP % (targetSPP / 10) == 0)
+			{
+				const float progress = static_cast<float>(currentSPP) / targetSPP * 100.0f;
+				std::cout << "Progress: " << currentSPP << "/" << targetSPP << " SPP (" << std::fixed << std::setprecision(1) << progress << "%)\r";
+			}
+
+			if (currentSPP >= targetSPP)
+			{
+				accumulationComplete = true;
+				std::cout << "Accumulation complete! (" << currentSPP << " SPP)\n";
+			}
+		}
+
 
 		// Bind the FBO as the "Read" source
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);

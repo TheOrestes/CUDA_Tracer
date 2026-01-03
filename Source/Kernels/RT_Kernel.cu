@@ -176,7 +176,7 @@ __device__ bool HitWorld(RT::Ray& r, float t_min, float t_max, RT::HitRecord& re
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials)
+__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -186,7 +186,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	// Initialize RNG per pixel
 	const int pixelIndex = y * width + x;
 	curandState localState;
-	curand_init(1984 + pixelIndex, frameCount, 0, &localState);
+	curand_init(1984 + pixelIndex, currentSPP, 0, &localState);
 
 	// Normalized coordinates
 	float u = (float(x) + RandomFloat(&localState)) / float(width - 1);
@@ -308,7 +308,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	// Accumulation logic!
 	float4 finalColor;
 
-	if(frameCount == 1)
+	if(currentSPP == 1)
 	{
 		// First frame, just save the current color!
 		finalColor = pixelColorRGBA;
@@ -319,7 +319,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		// subsequent frames = Blend!
 		const float4 oldColor = pAccumBuffer[pixelIndex];
 
-		float n = float(frameCount);
+		float n = float(currentSPP);
 
 		finalColor.x = oldColor.x + (pixelColorRGBA.x - oldColor.x) / n;
 		finalColor.y = oldColor.y + (pixelColorRGBA.y - oldColor.y) / n;
@@ -343,7 +343,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -367,7 +367,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, frameCount, pObjects, numObjects, pMaterials);
+	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);
