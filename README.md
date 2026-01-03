@@ -24,3 +24,6 @@ https://github.com/user-attachments/assets/9f4de096-762e-4ef0-8052-b9b4ec4c9cc7
 ## 8. Better Camera controls
 https://github.com/user-attachments/assets/4b8588b9-c283-41d8-81b4-4596c2edf25d
 
+## 9. Heatmap support
+https://github.com/user-attachments/assets/bedefe65-0981-4d11-9386-ab489b5a3b1b
+
