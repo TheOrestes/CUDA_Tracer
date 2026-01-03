@@ -21,3 +21,6 @@ https://github.com/user-attachments/assets/16ef531d-5107-4007-bc36-2d4f729e4684
 ## 7. Glass Refraction
 https://github.com/user-attachments/assets/9f4de096-762e-4ef0-8052-b9b4ec4c9cc7
 
+## 8. Better Camera controls
+https://github.com/user-attachments/assets/4b8588b9-c283-41d8-81b4-4596c2edf25d
+
