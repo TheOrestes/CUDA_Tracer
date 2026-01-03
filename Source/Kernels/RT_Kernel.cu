@@ -5,15 +5,40 @@
 
 //---------------------------------------------------------------------------------------------------------------------
 // --- Helper: Random float in [0, 1] ---
-__device__ inline float RandomFloat(curandState* state)
+__device__ float RandomFloat(curandState* state)
 {
 	return curand_uniform(state);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ inline float3 Reflect(const float3& V, const float3& N)
+__device__ float3 Reflect(const float3& V, const float3& N)
 {
 	return V - 2.0f * dot(V, N) * N;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool Refract(const float3& V, const float3& N, float ni_over_nt, float3& refracted)
+{
+	const float3 uv = unit_vector(V);
+	const float dt = dot(uv, N);
+	const float discriminant = 1.0f - ni_over_nt * ni_over_nt * (1.0f - dt * dt);
+
+	if (discriminant > 0.0f)
+	{
+		refracted = ni_over_nt * (uv - N * dt) - N * sqrtf(discriminant);
+		return true;
+	}
+
+	return false; // Total internal reflection
+}
+
+// -------------------------------------------------------------------------------------------------------------------- 
+// Schlick's approximation for Fresnel reflectance
+__device__ float Schlick(float cosine, float ref_idx)
+{
+	float r0 = (1.0f - ref_idx) / (1.0f + ref_idx);
+	r0 = r0 * r0;
+	return r0 + (1.0f - r0) * powf((1.0f - cosine), 5.0f);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -218,6 +243,53 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 
 				case RT::TRANSPARENT:
 				{
+					float3 outward_normal;
+					float3 reflected = Reflect(r.Direction, rec.Normal);
+					float ni_over_nt;
+					float3 refracted;
+					float reflect_prob;
+					float cosine;
+
+					// Determine if ray is entering or exiting the material
+					if (dot(r.Direction, rec.Normal) > 0.0f)
+					{
+						// Exiting the material
+						outward_normal = -rec.Normal;
+						ni_over_nt = material.IoR;
+						cosine = material.IoR * dot(r.Direction, rec.Normal) / sqrtf(dot(r.Direction, r.Direction));
+					}
+					else
+					{
+						// Entering the material
+						outward_normal = rec.Normal;
+						ni_over_nt = 1.0f / material.IoR;
+						cosine = -dot(r.Direction, rec.Normal) / sqrtf(dot(r.Direction, r.Direction));
+					}
+
+					// Try to refract
+					if (Refract(r.Direction, outward_normal, ni_over_nt, refracted))
+					{
+						reflect_prob = Schlick(cosine, material.IoR);
+					}
+					else
+					{
+						// Total internal reflection
+						reflect_prob = 1.0f;
+					}
+
+					// Randomly choose between reflection and refraction based on Fresnel
+					if (RandomFloat(&localState) < reflect_prob)
+					{
+						r = RT::Ray(rec.P, reflected);
+					}
+					else
+					{
+						r = RT::Ray(rec.P, refracted);
+					}
+
+					// Transparent materials don't attenuate color (or use material.Albedo for tinted glass)
+					currentColor = currentColor * make_float3(1.0f, 1.0f, 1.0f);
+
 					break;
 				}
 			}

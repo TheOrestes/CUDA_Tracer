@@ -168,14 +168,14 @@ void SetupScene()
 {
 	std::vector<RT::SceneObject> sceneObjects;
 
-	// Sphere
-	RT::SceneObject smallSphere;
-	smallSphere.type = RT::SPHERE;
-	smallSphere.MaterialID = 0;				// This index is look-up into the Materials list defined below!
-	smallSphere.sphere.center = make_float3(0, 0, -1);
-	smallSphere.sphere.radius = 0.5f;
+	// Center Transparent sphere
+	RT::SceneObject centerSphere;
+	centerSphere.type = RT::SPHERE;
+	centerSphere.MaterialID = 0;
+	centerSphere.sphere.center = make_float3(0, 0, 0.35f);
+	centerSphere.sphere.radius = 0.5f;
 
-	sceneObjects.push_back(smallSphere);
+	sceneObjects.push_back(centerSphere);
 
 	// Ground Sphere
 	RT::SceneObject groundSphere;
@@ -208,7 +208,7 @@ void SetupScene()
 
 	// Materials
 	std::vector<RT::Material> mats;
-	mats.push_back({RT::LAMBERTIAN, {0.8f, 0.8f, 0.0f}, 0.0f, 0.0f });	// small sphere
+	mats.push_back({RT::TRANSPARENT, {0.8f, 0.8f, 0.0f}, 0.0f, 1.5f });	// small sphere
 	mats.push_back({RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f, 0.0f });	// ground sphere
 	mats.push_back({ RT::METAL,{0.2f, 0.2f, 0.7f}, 0.0f, 0.0f });		// left shiny sphere
 	mats.push_back({ RT::METAL,{0.7f, 0.2f, 0.2f}, 0.3f, 0.0f });		// right fuzzy sphere
