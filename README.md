@@ -18,3 +18,6 @@ https://github.com/user-attachments/assets/d4c71d09-b7e8-4e5d-894c-dbe8c18a38be
 ## 6. Metal Surface with Roughness
 https://github.com/user-attachments/assets/16ef531d-5107-4007-bc36-2d4f729e4684
 
+## 7. Glass Refraction
+https://github.com/user-attachments/assets/9f4de096-762e-4ef0-8052-b9b4ec4c9cc7
+
