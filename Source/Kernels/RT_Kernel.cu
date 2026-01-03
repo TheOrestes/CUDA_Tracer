@@ -176,7 +176,7 @@ __device__ bool HitWorld(RT::Ray& r, float t_min, float t_max, RT::HitRecord& re
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials)
+__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials, bool showHeatmap)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -197,6 +197,9 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 	float3 currentColor = make_float3(1, 1, 1);
 	float3 pixelColor = make_float3(0, 0, 0);
 
+	// Heatmap - Track actual bounces taken!
+	int actualBounces = 0;
+
 	// Iterative Bounce Loop (Recursion Depth = 50)
 	for (int depth = 0 ; depth < 50 ; ++depth)
 	{
@@ -205,6 +208,9 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		// 2. Check Intersection & Calculate Color
 		if (HitWorld(r, 0.001f, 1000.0f, rec, pObjects, numObject))
 		{
+			// Heatmap - Increment the bounce count!
+			++actualBounces;
+
 			// Fetch material data from the gloabl memory
 			RT::Material material = pMaterials[rec.MaterialID];
 
@@ -302,8 +308,19 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		}
 	}
 
-
-	const float4 pixelColorRGBA = make_float4(pixelColor.x, pixelColor.y, pixelColor.z, 1.0f);
+	// Heatmap Visualization!
+	float4 pixelColorRGBA;
+	if(showHeatmap)
+	{
+		// Normalize bounce count to [0,1] range
+		float t = static_cast<float>(actualBounces) / 50;
+		float3 heatmapColor = GetHeatmapColor(t);
+		pixelColorRGBA = make_float4(heatmapColor.x, heatmapColor.y, heatmapColor.z, 1.0f);
+	}
+	else
+	{
+		pixelColorRGBA = make_float4(pixelColor.x, pixelColor.y, pixelColor.z, 1.0f);
+	}
 
 	// Accumulation logic!
 	float4 finalColor;
@@ -343,7 +360,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials, bool showHeatmap)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -367,7 +384,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials);
+	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials, showHeatmap);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);

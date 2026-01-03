@@ -36,7 +36,8 @@ bool accumulationComplete = false;
 int currentSPP = 0;
 constexpr int targetSPP = 100;
 float accumulationStartTime = 0.0f;  
-float totalRenderTime = 0.0f;         
+float totalRenderTime = 0.0f;
+bool showHeatmap = false;
 
 // Input State globals
 bool keys[1024] = { false };
@@ -109,7 +110,22 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 		else if (action == GLFW_RELEASE)
 			keys[key] = false;
 	}
+
+	// Heatmap toggle!
+	if (key == GLFW_KEY_H && action == GLFW_PRESS)
+	{
+		showHeatmap = !showHeatmap;
+		std::cout << "Heatmap mode: " << (showHeatmap ? "ON" : "OFF") << '\n';
+
+		// Reset accumulation when toggling to see immediate effect
+		currentSPP = 0;
+		accumulationComplete = false;
+
+		constexpr size_t bufferSize = width * height * sizeof(float4);
+		cudaMemset(gAccumulationBuffer, 0, bufferSize);
+	}
 }
+
 
 //---------------------------------------------------------------------------------------------------------------------
 // 3. Mouse button callback
@@ -184,7 +200,7 @@ void CreateTextureCUDA(GLuint* textureID, cudaGraphicsResource_t* cudaResource)
 
 	checkCudaError(err, "Registering Image");
 
-	std::cout << "Successfully registered OpenGL texture " << *textureID << " with CUDA." << std::endl;
+	std::cout << "Successfully registered OpenGL texture " << *textureID << " with CUDA." << '\n';
 }
 
 // -------------------------------------------------------------------------------------------------------------------- -
@@ -351,7 +367,7 @@ int main()
 			++currentSPP;
 
 			// Run CUDA kernel!
-			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial);
+			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, showHeatmap);
 
 			// Print progress every 1/10th step...
 			if (currentSPP % (targetSPP / 10) == 0)
