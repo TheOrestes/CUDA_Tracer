@@ -35,6 +35,8 @@ int gNumObjects = 0;
 bool accumulationComplete = false;
 int currentSPP = 0;
 constexpr int targetSPP = 100;
+float accumulationStartTime = 0.0f;  
+float totalRenderTime = 0.0f;         
 
 // Input State globals
 bool keys[1024] = { false };
@@ -333,12 +335,19 @@ int main()
 		if (cameraMoved)
 		{
 			currentSPP = 0;
-			accumulationComplete = false;
+			accumulationComplete = false;						
+			accumulationStartTime = currentTime;				// reset timer!
 			cudaMemset(gAccumulationBuffer, 0, bufferSize);
 		}
 
 		if(!accumulationComplete)
 		{
+			// Start timer on first sample
+			if(currentSPP == 0)
+			{
+				accumulationStartTime = currentTime;
+			}
+
 			++currentSPP;
 
 			// Run CUDA kernel!
@@ -347,14 +356,40 @@ int main()
 			// Print progress every 1/10th step...
 			if (currentSPP % (targetSPP / 10) == 0)
 			{
+				totalRenderTime = currentTime - accumulationStartTime;
+
 				const float progress = static_cast<float>(currentSPP) / targetSPP * 100.0f;
-				std::cout << "Progress: " << currentSPP << "/" << targetSPP << " SPP (" << std::fixed << std::setprecision(1) << progress << "%)\r";
+				const float sppPerSecond = static_cast<float>(currentSPP) / totalRenderTime;
+
+				std::cout << "Progress: " << currentSPP << "/" << targetSPP
+					<< " SPP (" << std::fixed << std::setprecision(1)
+					<< progress << "%) - "
+					<< totalRenderTime << "s - "
+					<< std::setprecision(2) << sppPerSecond << " SPP/s"
+					<< '\n';
 			}
 
+			// Check if complete!
 			if (currentSPP >= targetSPP)
 			{
 				accumulationComplete = true;
-				std::cout << "Accumulation complete! (" << currentSPP << " SPP)\n";
+
+				// Format time nicely
+				const int minutes = static_cast<int>(totalRenderTime / 60.0f);
+				const float seconds = totalRenderTime - (minutes * 60.0f);
+
+				std::cout << "\n=== Accumulation Complete ===" << '\n';
+				std::cout << "Total SPP: " << currentSPP << '\n';
+				std::cout << "Total Time: ";
+
+				if (minutes > 0)
+					std::cout << minutes << "m " << std::fixed << std::setprecision(1) << seconds << "s";
+				else
+					std::cout << std::fixed << std::setprecision(2) << totalRenderTime << "s";
+
+				std::cout << '\n';
+				std::cout << "Average: " << std::fixed << std::setprecision(2) << (currentSPP / totalRenderTime) << " SPP/s" << '\n';
+				std::cout << "============================\n" << '\n';
 			}
 		}
 
