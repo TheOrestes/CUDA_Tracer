@@ -43,6 +43,13 @@ __host__ __device__ inline float3 operator/(const float3& a, float s)
 }
 
 //-----------------------------------------------------------------------------------------------------------------
+__host__ __device__ inline float3 operator/(const float3& a, const float3& b)
+{
+    return make_float3(a.x / b.x, a.y / b.y, a.z / b.z);
+}
+
+
+//-----------------------------------------------------------------------------------------------------------------
 __host__ __device__ inline float dot(const float3& a, const float3& b)
 {
     return a.x * b.x + a.y * b.y + a.z * b.z;
@@ -307,5 +314,8 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource,
                         int numObjects,
                         RT::Material* pMaterials,
                         RT::BVHNode* pNodes,
+						int bvhNodeCount,
                         bool useBVH,
-						bool showHeatmap);
+						bool showHeatmap,
+						bool showBVH,
+						int bvhDebugDepth);

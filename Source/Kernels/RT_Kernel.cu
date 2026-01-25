@@ -124,6 +124,118 @@ __device__ bool hit_aabb(const RT::Ray& ray, const RT::AABB& box, float tmin, fl
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+__device__ float3 DebugDrawAABB(const RT::Ray& ray, const RT::AABB& box, const float3& color)
+{
+	// Check if ray hits this AABB
+	if (hit_aabb(ray, box, 0.001f, 1000.0f))
+	{
+		// Simple distance-based coloring
+		const float3 box_center = (box.min + box.max) * 0.5f;
+		const float dist = sqrtf(dot(box_center - ray.Origin, box_center - ray.Origin));
+		const float intensity = 1.0f / (1.0f + dist * 0.1f);
+		return color * intensity;
+	}
+	return make_float3(0, 0, 0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool IsNearAABBEdge(const float3& p, const RT::AABB& box, float thickness)
+{
+	// Normalize point to box-local coordinates [0, 1]
+	const float3 size = box.max - box.min;
+	float3 local;
+	local.x = (p.x - box.min.x) / size.x;
+	local.y = (p.y - box.min.y) / size.y;
+	local.z = (p.z - box.min.z) / size.z;
+
+	// Check if near any edge (within thickness of box boundary)
+	const bool near_x_edge = (local.x < thickness || local.x > 1.0f - thickness);
+	const bool near_y_edge = (local.y < thickness || local.y > 1.0f - thickness);
+	const bool near_z_edge = (local.z < thickness || local.z > 1.0f - thickness);
+
+	// Edge = at least 2 dimensions near boundary
+	int edge_count = 0;
+	if (near_x_edge) edge_count++;
+	if (near_y_edge) edge_count++;
+	if (near_z_edge) edge_count++;
+
+	return edge_count >= 2;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ float IntersectAABB(const RT::Ray& ray, const RT::AABB& box)
+{
+	float3 invDir;
+	invDir.x = 1.0f / ray.Direction.x;
+	invDir.y = 1.0f / ray.Direction.y;
+	invDir.z = 1.0f / ray.Direction.z;
+
+	const float3 t0 = (box.min - ray.Origin) * invDir;
+	const float3 t1 = (box.max - ray.Origin) * invDir;
+
+	const float3 tmin_v = make_float3(fminf(t0.x, t1.x), fminf(t0.y, t1.y), fminf(t0.z, t1.z));
+	const float3 tmax_v = make_float3(fmaxf(t0.x, t1.x), fmaxf(t0.y, t1.y), fmaxf(t0.z, t1.z));
+
+	const float tmin = fmaxf(fmaxf(tmin_v.x, tmin_v.y), tmin_v.z);
+	const float tmax = fminf(fminf(tmax_v.x, tmax_v.y), tmax_v.z);
+
+	if (tmax >= tmin && tmin > 0.0f)
+		return tmin;
+
+	return -1.0f;  // No hit
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ float3 DebugDrawBVH(const RT::Ray& ray, const RT::BVHNode* nodes, int bvhNodeCount, int maxDepth)
+{
+	float3 accumulatedColor = make_float3(0, 0, 0);
+	float total_weight = 0.0f;
+
+	// Check ALL nodes and accumulate colors
+	for (int i = 0; i < bvhNodeCount; i++)
+	{
+		float t = IntersectAABB(ray, nodes[i].bounds);
+
+		if (t > 0.0f && t < 100.0f)
+		{
+			float3 hit_point = ray.GetAt(t + 0.01f);
+
+			if (IsNearAABBEdge(hit_point, nodes[i].bounds, 0.01f))
+			{
+				float3 boxColor;
+
+				if (nodes[i].is_leaf)
+				{
+					// Bright colors for leaves
+					const int leaf_id = nodes[i].left_or_leaf;
+					if (leaf_id % 6 == 0)      boxColor = make_float3(1, 0, 0);
+					else if (leaf_id % 6 == 1) boxColor = make_float3(0, 1, 0);
+					else if (leaf_id % 6 == 2) boxColor = make_float3(0, 0, 1);
+					else if (leaf_id % 6 == 3) boxColor = make_float3(1, 1, 0);
+					else if (leaf_id % 6 == 4) boxColor = make_float3(1, 0, 1);
+					else                       boxColor = make_float3(0, 1, 1);
+				}
+				else
+				{
+					// White for internal nodes
+					boxColor = make_float3(1, 1, 1);
+				}
+
+				// Weight by distance (closer = brighter)
+				const float weight = 1.0f / (1.0f + t * 0.1f);
+				accumulatedColor = accumulatedColor + boxColor * weight;
+				total_weight += weight;
+			}
+		}
+	}
+
+	if (total_weight > 0.0f)
+		return accumulatedColor / total_weight;
+
+	return make_float3(0, 0, 0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 __device__ bool HitSphere(const RT::SphereData& s, const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec)
 {
 	const float3 oc = r.Origin - s.center;
@@ -299,8 +411,11 @@ __global__ void RayTracer(cudaSurfaceObject_t surface,
 						int numObject, 
 						RT::Material* pMaterials,
 						RT::BVHNode* pBVHNodes,
+						int bvhNodeCount,
 						bool useBVH,
-						bool showHeatmap)
+						bool showHeatmap,
+						bool showBVH,
+						int bvhDebugDepth)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -318,6 +433,15 @@ __global__ void RayTracer(cudaSurfaceObject_t surface,
 
 	// 1. Generate Ray from Camera
 	RT::Ray r = cam.GetRay(u, v);
+
+	if (showBVH && pBVHNodes != nullptr)
+	{
+		float3 bvhColor = DebugDrawBVH(r, pBVHNodes, bvhNodeCount, bvhDebugDepth);
+		float4 finalColor = make_float4(bvhColor.x, bvhColor.y, bvhColor.z, 1.0f);
+		surf2Dwrite(finalColor, surface, x * sizeof(float4), y);
+		return;  // Skip normal rendering
+	}
+
 	float3 currentColor = make_float3(1, 1, 1);
 	float3 pixelColor = make_float3(0, 0, 0);
 
@@ -493,8 +617,11 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource,
 						int numObjects, 
 						RT::Material* pMaterials,
 						RT::BVHNode* pBVHNodes,
+						int bvhNodeCount,
 						bool useBVH,
-						bool showHeatmap)
+						bool showHeatmap,
+						bool showBVH,
+						int bvhDebugDepth)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -518,7 +645,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource,
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials, pBVHNodes, useBVH, showHeatmap);
+	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials, pBVHNodes, bvhNodeCount, useBVH, showHeatmap, showBVH, bvhDebugDepth);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);

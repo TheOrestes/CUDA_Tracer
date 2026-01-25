@@ -33,6 +33,7 @@ RT::SceneObject* dSceneObject = nullptr;
 RT::BVHNode* d_nodes = nullptr;
 RT::Material* dMaterial = nullptr;
 int gNumObjects = 0;
+int gBVHNodeCount = 0;
 
 // Render settings globals
 bool accumulationComplete = false;
@@ -41,6 +42,8 @@ constexpr int targetSPP = 100;
 float accumulationStartTime = 0.0f;  
 float totalRenderTime = 0.0f;
 bool showHeatmap = false;
+bool showBVH = false;
+int bvhDebugDepth = 3;
 
 // Input State globals
 bool keys[1024] = { false };
@@ -126,6 +129,31 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 
 		constexpr size_t bufferSize = width * height * sizeof(float4);
 		cudaMemset(gAccumulationBuffer, 0, bufferSize);
+	}
+
+	// BVH toggle!
+	// Toggle with keyboard
+	if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS)
+	{
+		showBVH = !showBVH;
+
+		// Reset accumulation when toggling to see immediate effect
+		currentSPP = 0;
+		accumulationComplete = false;
+		
+		constexpr size_t bufferSize = width * height * sizeof(float4);
+		cudaMemset(gAccumulationBuffer, 0, bufferSize);
+	}
+
+	// Increase - Decrease the BVH visualization depth!
+	if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS)  // + key
+	{
+		bvhDebugDepth++;
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS)  // - key
+	{
+		bvhDebugDepth = std::max(0, bvhDebugDepth - 1);
 	}
 }
 
@@ -273,40 +301,13 @@ int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, i
 	const int node_idx = node_count++;
 
 	// Leaf node
-	if (end - start <= 2)
+	if (end - start <= 1)
 	{
-		// Compute bounds for objects in this leaf
-		RT::AABB bounds;
-		bool first = true;
-
-		for (int i = start; i < end; i++)
-		{
-			RT::AABB obj_bounds;
-
-			if (objects[i].type == RT::SPHERE)
-			{
-				obj_bounds = sphere_to_aabb(objects[i].sphere);
-			}
-			else if (objects[i].type == RT::MESH)
-			{
-				// Future: triangle bounds
-				//obj_bounds = triangle_to_aabb(objects[i].triangle);
-			}
-
-			if (first)
-			{
-				bounds = obj_bounds;
-				first = false;
-			}
-			else
-			{
-				bounds = combine_aabb(bounds, obj_bounds);
-			}
-		}
+		RT::AABB bounds = sphere_to_aabb(objects[start].sphere);
 
 		nodes[node_idx].bounds = bounds;
-		nodes[node_idx].left_or_leaf = start;           // First primitive
-		nodes[node_idx].right_or_count = end - start;   // Primitive count (leaf indicator)
+		nodes[node_idx].left_or_leaf = start;
+		nodes[node_idx].right_or_count = end - start;
 		nodes[node_idx].is_leaf = 1;
 		return node_idx;
 	}
@@ -404,18 +405,17 @@ void SetupScene()
 	// Build BVH on host
 	const int MAX_NODES = gNumObjects * 2;
 	RT::BVHNode* h_nodes = new RT::BVHNode[MAX_NODES];
-	int node_count = 0;
 
-	int root = buildBVH_simple(h_nodes, sceneObjects, 0, gNumObjects, node_count);
-	printf("BVH built: %d nodes for %d objects\n", node_count, gNumObjects);
+	int root = buildBVH_simple(h_nodes, sceneObjects, 0, gNumObjects, gBVHNodeCount);
+	printf("BVH built: %d nodes for %d objects\n", gBVHNodeCount, gNumObjects);
 
 	// Allocate device memory
 	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
-	cudaMalloc(&d_nodes, node_count * sizeof(RT::BVHNode));
+	cudaMalloc(&d_nodes, gBVHNodeCount * sizeof(RT::BVHNode));
 	cudaMalloc(&dMaterial, mats.size() * sizeof(RT::Material));
 
 	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_nodes, h_nodes, node_count * sizeof(RT::BVHNode), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_nodes, h_nodes, gBVHNodeCount * sizeof(RT::BVHNode), cudaMemcpyHostToDevice);
 	cudaMemcpy(dMaterial, mats.data(), mats.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
 }
 
@@ -487,7 +487,7 @@ int main()
 			++currentSPP;
 
 			// Run CUDA kernel!
-			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, true, showHeatmap);
+			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, gBVHNodeCount, false, showHeatmap, showBVH, bvhDebugDepth);
 
 			// Print progress every 1/10th step...
 			if (currentSPP % (targetSPP / 10) == 0)
