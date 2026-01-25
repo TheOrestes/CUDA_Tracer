@@ -4,6 +4,8 @@
 #define WIN32_LEAN_AND_MEAN
 
 #define GLEW_STATIC
+#include <algorithm>
+
 #include "GL/glew.h"
 #include "GLFW/glfw3.h"
 
@@ -28,6 +30,7 @@ constexpr int height = 450;
 // Scene globals
 RT::Camera gCamera;
 RT::SceneObject* dSceneObject = nullptr;
+RT::BVHNode* d_nodes = nullptr;
 RT::Material* dMaterial = nullptr;
 int gNumObjects = 0;
 
@@ -245,6 +248,104 @@ bool ProcessInput(float dt)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+RT::AABB ComputeOverallBounds(const std::vector<RT::SceneObject>& objects)
+{
+	if (objects.empty())
+		return { make_float3(0,0,0), make_float3(0,0,0) };
+
+	// Initialize with the FIRST object's bounds
+	RT::AABB bounds = sphere_to_aabb(objects[0].sphere);
+
+	for (size_t i = 1; i < objects.size(); i++)
+	{
+		if (objects[i].type == RT::SPHERE)
+		{
+			bounds = combine_aabb(bounds, sphere_to_aabb(objects[i].sphere));
+		}
+	}
+
+	return bounds;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, int start, int end, int& node_count)
+{
+	const int node_idx = node_count++;
+
+	// Leaf node
+	if (end - start <= 2)
+	{
+		// Compute bounds for objects in this leaf
+		RT::AABB bounds;
+		bool first = true;
+
+		for (int i = start; i < end; i++)
+		{
+			RT::AABB obj_bounds;
+
+			if (objects[i].type == RT::SPHERE)
+			{
+				obj_bounds = sphere_to_aabb(objects[i].sphere);
+			}
+			else if (objects[i].type == RT::MESH)
+			{
+				// Future: triangle bounds
+				//obj_bounds = triangle_to_aabb(objects[i].triangle);
+			}
+
+			if (first)
+			{
+				bounds = obj_bounds;
+				first = false;
+			}
+			else
+			{
+				bounds = combine_aabb(bounds, obj_bounds);
+			}
+		}
+
+		nodes[node_idx].bounds = bounds;
+		nodes[node_idx].left_or_leaf = start;           // First primitive
+		nodes[node_idx].right_or_count = end - start;   // Primitive count (leaf indicator)
+		nodes[node_idx].is_leaf = 1;
+		return node_idx;
+	}
+
+	// Simple middle split
+	const int mid = (start + end) / 2;
+
+	// Sort by X coordinate (works for any object type)
+	std::sort(objects.begin() + start, objects.begin() + end,
+		[](const RT::SceneObject& a, const RT::SceneObject& b)
+		{
+			float3 center_a, center_b;
+
+			if (a.type == RT::SPHERE)
+				center_a = a.sphere.center;
+			else // MESH/Triangle
+				center_a = (a.triangle.V0 + a.triangle.V1 + a.triangle.V2) / 3.0f;
+
+			if (b.type == RT::SPHERE)
+				center_b = b.sphere.center;
+			else // MESH/Triangle
+				center_b = (b.triangle.V0 + b.triangle.V1 + b.triangle.V2) / 3.0f;
+
+			return center_a.x < center_b.x;
+		});
+
+	const int left = buildBVH_simple(nodes, objects, start, mid, node_count);
+	const int right = buildBVH_simple(nodes, objects, mid, end, node_count);
+
+	// Internal node
+	nodes[node_idx].bounds = combine_aabb(nodes[left].bounds, nodes[right].bounds);
+	nodes[node_idx].left_or_leaf = left;
+	nodes[node_idx].right_or_count = right;
+	nodes[node_idx].is_leaf = 0;
+
+	return node_idx;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void SetupScene()
 {
 	std::vector<RT::SceneObject> sceneObjects;
@@ -294,12 +395,30 @@ void SetupScene()
 	mats.push_back({ RT::METAL,{0.2f, 0.2f, 0.7f}, 0.0f, 0.0f });		// left shiny sphere
 	mats.push_back({ RT::METAL,{0.7f, 0.2f, 0.2f}, 0.3f, 0.0f });		// right fuzzy sphere
 
-	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
-	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
+	// Optional: Check scene bounds
+	const RT::AABB sceneBounds = ComputeOverallBounds(sceneObjects);
+	printf("Scene bounds: min(%.2f, %.2f, %.2f) max(%.2f, %.2f, %.2f)\n",
+		sceneBounds.min.x, sceneBounds.min.y, sceneBounds.min.z,
+		sceneBounds.max.x, sceneBounds.max.y, sceneBounds.max.z);
 
+	// Build BVH on host
+	const int MAX_NODES = gNumObjects * 2;
+	RT::BVHNode* h_nodes = new RT::BVHNode[MAX_NODES];
+	int node_count = 0;
+
+	int root = buildBVH_simple(h_nodes, sceneObjects, 0, gNumObjects, node_count);
+	printf("BVH built: %d nodes for %d objects\n", node_count, gNumObjects);
+
+	// Allocate device memory
+	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
+	cudaMalloc(&d_nodes, node_count * sizeof(RT::BVHNode));
 	cudaMalloc(&dMaterial, mats.size() * sizeof(RT::Material));
+
+	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_nodes, h_nodes, node_count * sizeof(RT::BVHNode), cudaMemcpyHostToDevice);
 	cudaMemcpy(dMaterial, mats.data(), mats.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
 }
+
 
 //---------------------------------------------------------------------------------------------------------------------
 int main()
@@ -332,6 +451,7 @@ int main()
 	// Initialize Scene!
 	gCamera.Init(make_float3(0, 0, 2), make_float3(0, 0, -1), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
 
+	// Create scene and compute AABB!
 	SetupScene();
 
 	float deltaTime = 0.0f;
@@ -367,7 +487,7 @@ int main()
 			++currentSPP;
 
 			// Run CUDA kernel!
-			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, showHeatmap);
+			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, true, showHeatmap);
 
 			// Print progress every 1/10th step...
 			if (currentSPP % (targetSPP / 10) == 0)

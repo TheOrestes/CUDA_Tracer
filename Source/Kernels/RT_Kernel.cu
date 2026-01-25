@@ -1,7 +1,10 @@
 
+#include <algorithm>
+
 #include "RT_Common.cuh"
 #include <curand_kernel.h>
 #include <device_launch_parameters.h>
+#include <vector>
 
 //---------------------------------------------------------------------------------------------------------------------
 // --- Helper: Random float in [0, 1] ---
@@ -90,7 +93,38 @@ __device__ float3 GetMissColor(const RT::Ray& r, curandState state)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ bool HitSphere(const RT::SphereData& s, const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec) 
+__device__ bool hit_aabb(const RT::Ray& ray, const RT::AABB& box, float tmin, float tmax)
+{
+	const float invX = 1.0f / ray.Direction.x;
+	const float invY = 1.0f / ray.Direction.y;
+	const float invZ = 1.0f / ray.Direction.z;
+
+	float t0 = (box.min.x - ray.Origin.x) * invX;
+	float t1 = (box.max.x - ray.Origin.x) * invX;
+	float tminX = fminf(t0, t1);
+	const float tmaxX = fmaxf(t0, t1);
+
+	t0 = (box.min.y - ray.Origin.y) * invY;
+	t1 = (box.max.y - ray.Origin.y) * invY;
+	const float tminY = fminf(t0, t1);
+	const float tmaxY = fmaxf(t0, t1);
+
+	tmin = fmaxf(tmin, fminf(tmaxX, tminY));
+	tmax = fminf(tmax, fmaxf(tmaxX, tmaxY));
+
+	t0 = (box.min.z - ray.Origin.z) * invZ;
+	t1 = (box.max.z - ray.Origin.z) * invZ;
+	const float tminZ = fminf(t0, t1);
+	const float tmaxZ = fmaxf(t0, t1);
+
+	tmin = fmaxf(tmin, tminZ);
+	tmax = fminf(tmax, fmaxf(tmaxZ, tmaxY));
+
+	return tmax >= tmin && tmin < tmax && tmax > 0.0f;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__device__ bool HitSphere(const RT::SphereData& s, const RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec)
 {
 	const float3 oc = r.Origin - s.center;
 	const float a = dot(r.Direction, r.Direction);
@@ -155,28 +189,118 @@ __device__ bool HitObject(const RT::SceneObject& obj, RT::Ray& r, float t_min, f
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-__device__ bool HitWorld(RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec, RT::SceneObject* objects, int numObjects)
+__device__ bool traverse_bvh_simple(const RT::BVHNode* nodes,
+	const RT::SceneObject* objects,
+	int numObjects,
+	RT::Ray& ray,
+	RT::HitRecord& hit)
 {
-	RT::HitRecord temp_rec;
-	bool hit_anything = false;
-	float closest_so_far = t_max;
+	RT::BVHNode stack[32];
+	int stack_ptr = 0;
 
-	// Iterate through all the scene objects!
-	for (int i = 0; i < numObjects; i++) 
+	stack[stack_ptr++] = nodes[0];  // Root
+
+	bool hit_anything = false;
+	float closest_so_far = 1e30f;
+	RT::HitRecord temp_rec;
+
+	while (stack_ptr > 0)
 	{
-		if (HitObject(objects[i], r, t_min, closest_so_far, temp_rec)) 
+		RT::BVHNode node = stack[--stack_ptr];
+
+		if (!hit_aabb(ray, node.bounds, 0.001f, closest_so_far))
+			continue;
+
+		if (node.is_leaf)
 		{
-			hit_anything = true;
-			closest_so_far = temp_rec.t;
-			rec = temp_rec;
+			// Leaf: test objects
+			if (node.right_or_count > 0 && node.right_or_count <= 2)
+			{
+				for (int i = 0; i < node.right_or_count; i++)
+				{
+					const int obj_idx = node.left_or_leaf + i;
+					if (obj_idx >= numObjects) break;
+
+					// Use your existing HitObject function
+					if (HitObject(objects[obj_idx], ray, 0.001f, closest_so_far, temp_rec))
+					{
+						hit_anything = true;
+						closest_so_far = temp_rec.t;
+						hit = temp_rec;
+					}
+				}
+			}
+		}
+		else
+		{
+			// Internal: push children (near first)
+			const RT::BVHNode left_node = nodes[node.left_or_leaf];
+			const RT::BVHNode right_node = nodes[node.right_or_count];
+
+			// Better ordering based on ray direction
+			float3 left_center = (left_node.bounds.min + left_node.bounds.max) * 0.5f;
+			float3 right_center = (right_node.bounds.min + right_node.bounds.max) * 0.5f;
+
+			const float dist_left = dot(left_center - ray.Origin, ray.Direction);
+			const float dist_right = dot(right_center - ray.Origin, ray.Direction);
+
+			if (dist_left < dist_right)
+			{
+				stack[stack_ptr++] = right_node;
+				stack[stack_ptr++] = left_node;
+			}
+			else
+			{
+				stack[stack_ptr++] = left_node;
+				stack[stack_ptr++] = right_node;
+			}
 		}
 	}
 
 	return hit_anything;
 }
 
+
 //---------------------------------------------------------------------------------------------------------------------
-__global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT::Camera cam, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObject, RT::Material* pMaterials, bool showHeatmap)
+__device__ bool HitWorld(RT::Ray& r, float t_min, float t_max, RT::HitRecord& rec,
+	RT::SceneObject* objects, int numObjects,
+	RT::BVHNode* nodes, bool useBVH)
+{
+	if (!useBVH || nodes == nullptr)
+	{
+		// Fallback: brute force
+		RT::HitRecord temp_rec;
+		bool hit_anything = false;
+		float closest_so_far = t_max;
+
+		for (int i = 0; i < numObjects; i++)
+		{
+			if (HitObject(objects[i], r, t_min, closest_so_far, temp_rec))
+			{
+				hit_anything = true;
+				closest_so_far = temp_rec.t;
+				rec = temp_rec;
+			}
+		}
+		return hit_anything;
+	}
+
+	// Use BVH traversal
+	return traverse_bvh_simple(nodes, objects, numObjects, r, rec);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__global__ void RayTracer(cudaSurfaceObject_t surface, 
+						int width, int height, 
+						RT::Camera cam, 
+						float4* pAccumBuffer, 
+						int currentSPP, 
+						RT::SceneObject* pObjects, 
+						int numObject, 
+						RT::Material* pMaterials,
+						RT::BVHNode* pBVHNodes,
+						bool useBVH,
+						bool showHeatmap)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -206,7 +330,7 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 		RT::HitRecord rec;
 
 		// 2. Check Intersection & Calculate Color
-		if (HitWorld(r, 0.001f, 1000.0f, rec, pObjects, numObject))
+		if (HitWorld(r, 0.001f, 1000.0f, rec, pObjects, numObject, pBVHNodes, useBVH))
 		{
 			// Heatmap - Increment the bounce count!
 			++actualBounces;
@@ -360,7 +484,17 @@ __global__ void RayTracer(cudaSurfaceObject_t surface, int width, int height, RT
 // 2. Runs CUDA kernel
 // 3. Writes data to the texture
 // 4. Gives back control of the updated texture to OpenGL
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int currentSPP, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials, bool showHeatmap)
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, 
+						int cuWidth, int cuHeight, 
+						RT::Camera camera, 
+						float4* pAccumBuffer, 
+						int currentSPP, 
+						RT::SceneObject* pObjects, 
+						int numObjects, 
+						RT::Material* pMaterials,
+						RT::BVHNode* pBVHNodes,
+						bool useBVH,
+						bool showHeatmap)
 {
 	// Map the OpenGL resource, post this CUDA controls the texture...
 	cudaGraphicsMapResources(1, &cuda_graphics_resource, 0);
@@ -384,7 +518,7 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWi
 	dim3 blocksPerGrid((cuWidth + threadsPerBlock.x - 1) / threadsPerBlock.x, (cuHeight + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
 	// Launch the CUDA Kernel!
-	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials, showHeatmap);
+	RayTracer <<<blocksPerGrid, threadsPerBlock>>>(surface, cuWidth, cuHeight, camera, pAccumBuffer, currentSPP, pObjects, numObjects, pMaterials, pBVHNodes, useBVH, showHeatmap);
 
 	// Cleanup!
 	cudaDestroySurfaceObject(surface);

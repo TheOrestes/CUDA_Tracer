@@ -67,10 +67,12 @@ __host__ __device__ inline float3 operator-(const float3& a)
     return make_float3(-a.x, -a.y, -a.z);
 }
 
+
+
 //-----------------------------------------------------------------------------------------------------------------
 namespace RT
 {
-    //---
+    //-----------
     struct Ray
     {
         float3 Origin;
@@ -81,7 +83,7 @@ namespace RT
         __host__ __device__ float3 GetAt(float t) const { return Origin + Direction * t; }
     };
 
-    //---
+    //-----------
     struct HitRecord
     {
         float   t;
@@ -91,18 +93,37 @@ namespace RT
         int     MaterialID;
     };
 
+    //-----------
+    struct AABB
+    {
+	    float3 min;
+	    float3 max;
+    };
+
+    //-----------
+    struct BVHNode
+    {
+        AABB bounds;
+        int left_or_leaf;       // left child index OR leaf primitive index
+        int right_or_count;     // right child index OR split axis (-1 for leaf)
+        int is_leaf;            // 1 = leaf, 0 = internal
+    };
+
+    //-----------
     enum ObjectType
     {
         SPHERE,
         MESH
     };
 
+    //-----------
     struct SphereData
     {
         float3 center;
         float radius;
     };
 
+    //-----------
     struct TriangleData
     {
         float3 V0, V1, V2;
@@ -110,6 +131,7 @@ namespace RT
         float3 Normal;
     };
 
+    //-----------
     struct SceneObject
     {
         ObjectType type;
@@ -125,6 +147,7 @@ namespace RT
         __device__ bool Hit(const Ray& r, float tMin, float tMax, HitRecord& rec) const;
     };
 
+    //-----------
     enum MaterialType
     {
         LAMBERTIAN,
@@ -133,6 +156,7 @@ namespace RT
         TRANSPARENT
     };
 
+    //-----------
     struct Material
     {
         MaterialType type;
@@ -141,9 +165,7 @@ namespace RT
         float IoR;
     };
 
-
-
-    //---
+    //-----------
     struct Sphere
     {
         float3 center;
@@ -151,7 +173,7 @@ namespace RT
         float3 color;
     };
 
-    //---
+    //-----------
     struct Camera
     {
         float3 Origin;
@@ -241,4 +263,49 @@ namespace RT
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource, int cuWidth, int cuHeight, RT::Camera camera, float4* pAccumBuffer, int frameCount, RT::SceneObject* pObjects, int numObjects, RT::Material* pMaterials, bool showHeatmap);
+__host__ __device__ inline float surface_area(const RT::AABB& aabb)
+{
+    float dx = aabb.max.x - aabb.min.x;
+    float dy = aabb.max.y - aabb.min.y;
+    float dz = aabb.max.z - aabb.min.z;
+    return 2.0f * (dx * dy + dy * dz + dz * dx);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__host__ __device__ inline RT::AABB make_aabb(float minx, float miny, float minz,
+                                       float maxx, float maxy, float maxz)
+{
+	RT::AABB box;
+    box.min.x = minx; box.min.y = miny; box.min.z = minz;
+    box.max.x = maxx; box.max.y = maxy; box.max.z = maxz;
+    return box;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__host__ __device__ inline RT::AABB sphere_to_aabb(const RT::SphereData& s)
+{
+    RT::AABB box;
+    box.min = s.center - make_float3(s.radius, s.radius, s.radius);
+    box.max = s.center + make_float3(s.radius, s.radius, s.radius);
+    return box;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+__host__ __device__ inline RT::AABB combine_aabb(const RT::AABB& a, const RT::AABB& b)
+{
+    return make_aabb(fminf(a.min.x, b.min.x), fminf(a.min.y, b.min.y), fminf(a.min.z, b.min.z),
+        fmaxf(a.max.x, b.max.x), fmaxf(a.max.y, b.max.y), fmaxf(a.max.z, b.max.z));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource,
+                        int cuWidth, int cuHeight,
+                        RT::Camera camera,
+                        float4* pAccumBuffer,
+                        int frameCount,
+                        RT::SceneObject* pObjects,
+                        int numObjects,
+                        RT::Material* pMaterials,
+                        RT::BVHNode* pNodes,
+                        bool useBVH,
+						bool showHeatmap);
