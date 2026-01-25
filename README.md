@@ -27,3 +27,6 @@ https://github.com/user-attachments/assets/4b8588b9-c283-41d8-81b4-4596c2edf25d
 ## 9. Heatmap support
 https://github.com/user-attachments/assets/bedefe65-0981-4d11-9386-ab489b5a3b1b
 
+## 10. Added BVH & Debug visualisation for BVH
+https://github.com/user-attachments/assets/d5ef46b1-cd6a-4b73-8d16-13de3b067b0a
+
