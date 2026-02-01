@@ -132,6 +132,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Source\GLRenderer\BVHDebugRenderer.cpp" />
     <ClCompile Include="Source\GLRenderer\Main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -139,6 +140,9 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="Source\Kernels\RT_Kernel.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\GLRenderer\BVHDebugRenderer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

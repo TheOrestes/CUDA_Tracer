@@ -18,9 +18,17 @@
     <ClCompile Include="Source\GLRenderer\Main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Source\GLRenderer\BVHDebugRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="Source\Kernels\RT_Kernel.cu" />
     <CudaCompile Include="Source\Kernels\RT_Common.cuh" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\GLRenderer\BVHDebugRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

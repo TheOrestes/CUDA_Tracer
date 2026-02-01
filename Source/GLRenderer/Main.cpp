@@ -18,6 +18,7 @@
 #include <iostream>
 
 #include "Kernels/RT_Common.cuh"
+#include "GLRenderer/BVHDebugRenderer.h"
 
 //---------------------------------------------------------------------------------------------------------------------
 GLFWwindow* window = nullptr;
@@ -31,6 +32,7 @@ constexpr int height = 450;
 RT::Camera gCamera;
 RT::SceneObject* dSceneObject = nullptr;
 RT::BVHNode* d_nodes = nullptr;
+BVHDebugRenderer* gBVHRenderer = nullptr;
 RT::Material* dMaterial = nullptr;
 int gNumObjects = 0;
 int gBVHNodeCount = 0;
@@ -131,18 +133,12 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 		cudaMemset(gAccumulationBuffer, 0, bufferSize);
 	}
 
-	// BVH toggle!
+	// BVH wireframe toggle!
 	// Toggle with keyboard
-	if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS)
+	if (key == GLFW_KEY_B && action == GLFW_PRESS)
 	{
 		showBVH = !showBVH;
-
-		// Reset accumulation when toggling to see immediate effect
-		currentSPP = 0;
-		accumulationComplete = false;
-		
-		constexpr size_t bufferSize = width * height * sizeof(float4);
-		cudaMemset(gAccumulationBuffer, 0, bufferSize);
+		std::cout << "BVH Wireframe: " << (showBVH? "ON" : "OFF") << '\n';
 	}
 
 	// Increase - Decrease the BVH visualization depth!
@@ -417,6 +413,13 @@ void SetupScene()
 	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_nodes, h_nodes, gBVHNodeCount * sizeof(RT::BVHNode), cudaMemcpyHostToDevice);
 	cudaMemcpy(dMaterial, mats.data(), mats.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
+
+	// Initialize BVH Debug renderer
+	gBVHRenderer = new BVHDebugRenderer();
+	gBVHRenderer->Initialize(h_nodes, gBVHNodeCount);
+	gBVHRenderer->SetLineWidth(2.5f);
+
+	delete[] h_nodes;
 }
 
 
@@ -487,7 +490,7 @@ int main()
 			++currentSPP;
 
 			// Run CUDA kernel!
-			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, gBVHNodeCount, false, showHeatmap, showBVH, bvhDebugDepth);
+			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, gBVHNodeCount, true, showHeatmap);
 
 			// Print progress every 1/10th step...
 			if (currentSPP % (targetSPP / 10) == 0)
@@ -528,24 +531,30 @@ int main()
 				std::cout << "============================\n" << '\n';
 			}
 		}
-
+		
 
 		// Bind the FBO as the "Read" source
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
 		// Bind the default screen (0) as the "Draw" destination
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+		glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-		glBlitFramebuffer(
-			0, 0, width, height,
-			0, 0, width, height,
-			GL_COLOR_BUFFER_BIT,
-			GL_NEAREST
-		);
+		// Render BVH wireframe!
+		if(showBVH && gBVHRenderer)
+		{
+			gBVHRenderer->Render(gCamera);
+		}
 
 		glfwSwapBuffers(window);
 	}
 
 	// 4. Cleanup
+	if(gBVHRenderer)
+	{
+		delete gBVHRenderer;
+		gBVHRenderer = nullptr;
+	}
+
 	// Always unregister before destroying the GL texture
 	cudaGraphicsUnregisterResource(fbCudaResource);
 	cudaFree(gAccumulationBuffer);

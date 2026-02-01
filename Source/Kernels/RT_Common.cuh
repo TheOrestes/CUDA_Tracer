@@ -316,6 +316,4 @@ void RunRayTracingKernel(cudaGraphicsResource_t cuda_graphics_resource,
                         RT::BVHNode* pNodes,
 						int bvhNodeCount,
                         bool useBVH,
-						bool showHeatmap,
-						bool showBVH,
-						int bvhDebugDepth);
+						bool showHeatmap);
