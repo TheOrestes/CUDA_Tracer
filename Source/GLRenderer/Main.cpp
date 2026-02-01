@@ -40,7 +40,7 @@ int gBVHNodeCount = 0;
 // Render settings globals
 bool accumulationComplete = false;
 int currentSPP = 0;
-constexpr int targetSPP = 100;
+constexpr int targetSPP = 50;
 float accumulationStartTime = 0.0f;  
 float totalRenderTime = 0.0f;
 bool showHeatmap = false;
@@ -55,6 +55,12 @@ double lastMouseX = 0.0;
 double lastMouseY = 0.0;
 bool firstMouse = true;
 constexpr float mouseSensitivity = 0.003f; // Adjust for faster/slower rotation
+
+//---------------------------------------------------------------------------------------------------------------------
+float GetRandom01()
+{
+	return (static_cast<float>(rand()) / (RAND_MAX + 1));
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -299,7 +305,7 @@ int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, i
 	// Leaf node
 	if (end - start <= 1)
 	{
-		RT::AABB bounds = sphere_to_aabb(objects[start].sphere);
+		const RT::AABB bounds = sphere_to_aabb(objects[start].sphere);
 
 		nodes[node_idx].bounds = bounds;
 		nodes[node_idx].left_or_leaf = start;
@@ -343,9 +349,10 @@ int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, i
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void SetupScene()
+void InitSimpleScene(std::vector<RT::SceneObject>& objects, std::vector<RT::Material>& mats)
 {
-	std::vector<RT::SceneObject> sceneObjects;
+	// Initialize Scene!
+	gCamera.Init(make_float3(0, 0, 2), make_float3(0, 0, -1), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
 
 	// Center Transparent sphere
 	RT::SceneObject centerSphere;
@@ -354,7 +361,7 @@ void SetupScene()
 	centerSphere.sphere.center = make_float3(0, 0, 0.35f);
 	centerSphere.sphere.radius = 0.5f;
 
-	sceneObjects.push_back(centerSphere);
+	objects.push_back(centerSphere);
 
 	// Ground Sphere
 	RT::SceneObject groundSphere;
@@ -363,7 +370,7 @@ void SetupScene()
 	groundSphere.sphere.center = make_float3(0.0f, -100.5f, -1.0f);
 	groundSphere.sphere.radius = 100.0f;
 
-	sceneObjects.push_back(groundSphere);
+	objects.push_back(groundSphere);
 
 	// Left Sphere
 	RT::SceneObject leftSphere;
@@ -372,7 +379,7 @@ void SetupScene()
 	leftSphere.sphere.center = make_float3(-1.2f, 0, -1.0f);
 	leftSphere.sphere.radius = 0.5f;
 
-	sceneObjects.push_back(leftSphere);
+	objects.push_back(leftSphere);
 
 	// Right Sphere
 	RT::SceneObject rightSphere;
@@ -381,16 +388,136 @@ void SetupScene()
 	rightSphere.sphere.center = make_float3(1.2f, 0, -1.0f);
 	rightSphere.sphere.radius = 0.5f;
 
-	sceneObjects.push_back(rightSphere);
+	objects.push_back(rightSphere);
 
-	gNumObjects = static_cast<int>(sceneObjects.size());
+	gNumObjects = static_cast<int>(objects.size());
 
 	// Materials
-	std::vector<RT::Material> mats;
-	mats.push_back({RT::TRANSPARENT, {0.8f, 0.8f, 0.0f}, 0.0f, 1.5f });	// small sphere
-	mats.push_back({RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f, 0.0f });	// ground sphere
+	mats.push_back({ RT::TRANSPARENT, {0.8f, 0.8f, 0.0f}, 0.0f, 1.5f });	// small sphere
+	mats.push_back({ RT::LAMBERTIAN,{0.8f, 0.8f, 0.8f}, 0.0f, 0.0f });	// ground sphere
 	mats.push_back({ RT::METAL,{0.2f, 0.2f, 0.7f}, 0.0f, 0.0f });		// left shiny sphere
 	mats.push_back({ RT::METAL,{0.7f, 0.2f, 0.2f}, 0.3f, 0.0f });		// right fuzzy sphere
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void InitRandomScene(std::vector<RT::SceneObject>& objects, std::vector<RT::Material>& mats)
+{
+	// Initialize Scene!
+	gCamera.Init(make_float3(5.0f, 2.5f, 5.0f), make_float3(0, 0, 0), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
+
+	// Ground sphere
+	RT::SceneObject Sphere0;
+	Sphere0.type = RT::SPHERE;
+	Sphere0.MaterialID = 0;
+	Sphere0.sphere.center = make_float3(0, -1000.0f, 0.0f);
+	Sphere0.sphere.radius = 1000.0f;
+
+	objects.push_back(Sphere0);
+	mats.push_back({ RT::LAMBERTIAN,{0.5f, 0.5f, 0.5f}, 0.0f, 0.0f });	// ground sphere
+
+	int i = 1; int objDims = 3;
+	for (int a = -objDims; a < objDims; a++)
+	{
+		for(int b = -objDims; b < objDims; b++)
+		{
+			float randomMat = GetRandom01();
+
+			float3 center = make_float3(a + 0.9f * GetRandom01(), 0.2f, b + 0.9f * GetRandom01());
+			if(length(center - make_float3(4.0f, 0.2f, 0.0f)) > 0.9f)
+			{
+				if(randomMat < 0.8f)
+				{
+					// Lambertian
+					RT::SceneObject temp;
+					temp.type = RT::SPHERE;
+					temp.MaterialID = i;
+					temp.sphere.center = center;
+					temp.sphere.radius = 0.2f;
+
+					objects.push_back(temp);
+
+					float3 lambertColor = make_float3(GetRandom01() * GetRandom01(), GetRandom01() * GetRandom01(), GetRandom01() * GetRandom01());
+					mats.push_back({ RT::LAMBERTIAN, lambertColor, 0.0f, 0.0f });
+				}
+				else if(randomMat < 0.95f)
+				{
+					// Metal
+					RT::SceneObject temp;
+					temp.type = RT::SPHERE;
+					temp.MaterialID = i;
+					temp.sphere.center = center;
+					temp.sphere.radius = 0.2f;
+
+					objects.push_back(temp);
+
+					float3 metalColor = make_float3(0.5f * (1 + GetRandom01()), 0.5f * (1 + GetRandom01()), 0.5f * (1 + GetRandom01()));
+					mats.push_back({ RT::METAL, metalColor, GetRandom01(), 0.0f });
+				}
+				else
+				{
+					// Transparent
+					RT::SceneObject temp;
+					temp.type = RT::SPHERE;
+					temp.MaterialID = i;
+					temp.sphere.center = center;
+					temp.sphere.radius = 0.2f;
+
+					objects.push_back(temp);
+
+					float3 glassColor = make_float3(GetRandom01(), GetRandom01(), GetRandom01());
+					mats.push_back({ RT::TRANSPARENT, glassColor, 0.0f, 1.5f });
+				}
+			}
+
+			i++;
+		}
+	}
+
+	RT::SceneObject Sphere1;
+	Sphere1.type = RT::SPHERE;
+	Sphere1.MaterialID = i++;
+	Sphere1.sphere.center = make_float3(0, 1.0f, 0.0f);
+	Sphere1.sphere.radius = 1.0f;
+
+	objects.push_back(Sphere1);
+
+	float3 sphere1Color = make_float3(GetRandom01(), GetRandom01(), GetRandom01());
+	mats.push_back({ RT::TRANSPARENT, sphere1Color, 0.0f, 1.5f });
+
+	RT::SceneObject Sphere2;
+	Sphere2.type = RT::SPHERE;
+	Sphere2.MaterialID = i++;
+	Sphere2.sphere.center = make_float3(-4.0f, 1.0f, 0.0f);
+	Sphere2.sphere.radius = 1.0f;
+
+	objects.push_back(Sphere2);
+
+	float3 sphere2Color = make_float3(0.4f, 0.2f, 0.1f);
+	mats.push_back({ RT::LAMBERTIAN, sphere2Color, 0.1f, 0.0f });
+
+	RT::SceneObject Sphere3;
+	Sphere3.type = RT::SPHERE;
+	Sphere3.MaterialID = i++;
+	Sphere3.sphere.center = make_float3(4.0f, 1.0f, 0.0f);
+	Sphere3.sphere.radius = 1.0f;
+
+	objects.push_back(Sphere3);
+
+	float3 sphere3Color = make_float3(0.7f, 0.6f, 0.5f);
+	mats.push_back({ RT::METAL, sphere3Color, 0.0f, 0.0f});
+
+	// !!! IMPORTANT !!!
+	gNumObjects = static_cast<int>(objects.size());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void SetupScene()
+{
+	std::vector<RT::SceneObject> sceneObjects;
+	std::vector<RT::Material> materials;
+
+	//InitSimpleScene(sceneObjects, materials);
+	InitRandomScene(sceneObjects, materials);
 
 	// Optional: Check scene bounds
 	const RT::AABB sceneBounds = ComputeOverallBounds(sceneObjects);
@@ -408,11 +535,11 @@ void SetupScene()
 	// Allocate device memory
 	cudaMalloc(&dSceneObject, sceneObjects.size() * sizeof(RT::SceneObject));
 	cudaMalloc(&d_nodes, gBVHNodeCount * sizeof(RT::BVHNode));
-	cudaMalloc(&dMaterial, mats.size() * sizeof(RT::Material));
+	cudaMalloc(&dMaterial, materials.size() * sizeof(RT::Material));
 
 	cudaMemcpy(dSceneObject, sceneObjects.data(), sceneObjects.size() * sizeof(RT::SceneObject), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_nodes, h_nodes, gBVHNodeCount * sizeof(RT::BVHNode), cudaMemcpyHostToDevice);
-	cudaMemcpy(dMaterial, mats.data(), mats.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
+	cudaMemcpy(dMaterial, materials.data(), materials.size() * sizeof(RT::Material), cudaMemcpyHostToDevice);
 
 	// Initialize BVH Debug renderer
 	gBVHRenderer = new BVHDebugRenderer();
@@ -450,9 +577,6 @@ int main()
 	constexpr size_t bufferSize = width * height * sizeof(float4);
 	cudaMalloc(&gAccumulationBuffer, bufferSize);
 	cudaMemset(gAccumulationBuffer, 0, bufferSize);
-
-	// Initialize Scene!
-	gCamera.Init(make_float3(0, 0, 2), make_float3(0, 0, -1), make_float3(0, 1, 0), 45.0f, static_cast<float>(width) / static_cast<float>(height));
 
 	// Create scene and compute AABB!
 	SetupScene();
@@ -492,8 +616,8 @@ int main()
 			// Run CUDA kernel!
 			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, gBVHNodeCount, true, showHeatmap);
 
-			// Print progress every 1/10th step...
-			if (currentSPP % (targetSPP / 10) == 0)
+			// Print progress every 1/5th step...
+			if (currentSPP % (targetSPP / 5) == 0)
 			{
 				totalRenderTime = currentTime - accumulationStartTime;
 
