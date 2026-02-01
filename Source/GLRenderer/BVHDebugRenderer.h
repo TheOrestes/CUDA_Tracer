@@ -20,9 +20,14 @@ public:
     void Cleanup();
 
     // Settings
-    void SetLineWidth(float width) { m_lineWidth = width; }
     void SetShowInternalNodes(bool show) { m_showInternal = show; }
     void SetShowLeafNodes(bool show) { m_showLeaves = show; }
+    void EnableDepthColorMode(bool byDepth) { m_colorByDepth = byDepth; }
+    void SetMaxDepth(int depth) { m_maxDepth = depth; }
+    void SetBaseLineWidth(float width) { m_lineWidth = width; }
+
+    // Helper to get color by depth
+    void GetDepthColor(int depth, float color[3]);
 
 private:
     struct LineVertex
@@ -36,8 +41,11 @@ private:
         float m[16];
     };
 
+    // Store lines organized by depth
+	std::vector<std::vector<LineVertex>> m_linesByDepth;
+
     // Generate line geometry from BVH
-    std::vector<LineVertex> GenerateLines(RT::BVHNode* nodes, int nodeCount);
+    std::vector<LineVertex> GenerateLinesForDepth(RT::BVHNode* nodes, int nodeCount, int depth);
 
     // Shader helpers
     GLuint LoadShaders();
@@ -59,6 +67,9 @@ private:
     bool m_showInternal;
     bool m_showLeaves;
     bool m_initialized;
+    bool m_colorByDepth;
+    int m_maxDepth;
+    int m_treeMaxDepth;         // actual max depth in the tree!
 };
 
 

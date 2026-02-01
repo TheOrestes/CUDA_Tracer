@@ -13,6 +13,7 @@ BVHDebugRenderer::BVHDebugRenderer()
     , m_showInternal(true)
     , m_showLeaves(true)
     , m_initialized(false)
+	, m_treeMaxDepth(0)
 {
 }
 
@@ -32,10 +33,27 @@ void BVHDebugRenderer::Initialize(RT::BVHNode* nodes, int nodeCount)
 
     std::cout << "Initializing BVH Debug Renderer...\n";
 
-    // Generate line geometry
-    const std::vector<LineVertex> lines = GenerateLines(nodes, nodeCount);
-    m_lineCount = static_cast<int>(lines.size());
+    // Find max depth
+    m_treeMaxDepth = 0;
+    for (int i = 0; i < nodeCount; i++)
+    {
+        if (nodes[i].depth > m_treeMaxDepth)
+            m_treeMaxDepth = nodes[i].depth;
+    }
+    std::cout << "BVH Max Depth: " << m_treeMaxDepth << '\n';
 
+    // Generate lines organized by depth
+    m_linesByDepth.clear();
+    m_linesByDepth.resize(m_treeMaxDepth + 1);
+
+    int totalVertices = 0;
+    for (int depth = 0; depth <= m_treeMaxDepth; depth++)
+    {
+        m_linesByDepth[depth] = GenerateLinesForDepth(nodes, nodeCount, depth);
+        totalVertices += m_linesByDepth[depth].size();
+    }
+
+    m_lineCount = totalVertices;
     std::cout << "Generated " << m_lineCount << " vertices for BVH wireframe\n";
 
     // Create VAO and VBO
@@ -44,8 +62,8 @@ void BVHDebugRenderer::Initialize(RT::BVHNode* nodes, int nodeCount)
 
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBufferData(GL_ARRAY_BUFFER, lines.size() * sizeof(LineVertex),
-        lines.data(), GL_STATIC_DRAW);
+
+    // Don't buffer data yet - will be done per-depth in Render()
 
     // Position attribute (location 0)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)0);
@@ -83,16 +101,34 @@ void BVHDebugRenderer::Render(const RT::Camera& camera)
     glUniformMatrix4fv(vpLoc, 1, GL_FALSE, viewProj.m);
 
     // Enable rendering settings
-    glLineWidth(m_lineWidth);
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_LINE_SMOOTH);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 
-    // Draw lines
     glBindVertexArray(m_vao);
-    glDrawArrays(GL_LINES, 0, m_lineCount);
+
+    // NEW: Render each depth with different line width
+    for (int depth = 0; depth <= m_treeMaxDepth; depth++)
+    {
+        if (m_linesByDepth[depth].empty())
+            continue;
+
+        // Calculate line width: thick for root, thin for leaves
+        const float depthRatio = static_cast<float>(depth) / static_cast<float>(m_treeMaxDepth);
+        const float lineWidth = m_lineWidth * (1.0f - depthRatio * 0.8f);
+        glLineWidth(std::max(1.0f, lineWidth));
+
+        // Upload and draw this depth's lines
+        glBufferData(GL_ARRAY_BUFFER,
+            m_linesByDepth[depth].size() * sizeof(LineVertex),
+            m_linesByDepth[depth].data(),
+            GL_DYNAMIC_DRAW);
+
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_linesByDepth[depth].size()));
+    }
+
     glBindVertexArray(0);
 
     // Restore defaults
@@ -126,12 +162,16 @@ void BVHDebugRenderer::Cleanup()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-std::vector<BVHDebugRenderer::LineVertex> BVHDebugRenderer::GenerateLines(RT::BVHNode* nodes, int nodeCount)
+std::vector<BVHDebugRenderer::LineVertex> BVHDebugRenderer::GenerateLinesForDepth(RT::BVHNode* nodes, int nodeCount, int targetDepth)
 {
     std::vector<LineVertex> lines;
 
     for (int i = 0; i < nodeCount; i++)
     {
+        // Only process nodes at this specific depth
+        if (nodes[i].depth != targetDepth)
+            continue;
+
         // Skip based on settings
         if (nodes[i].is_leaf && !m_showLeaves)
             continue;
@@ -140,40 +180,27 @@ std::vector<BVHDebugRenderer::LineVertex> BVHDebugRenderer::GenerateLines(RT::BV
 
         const RT::AABB box = nodes[i].bounds;
 
-        // Color based on leaf/internal
+        // Color based on depth
         float color[3];
-        if (nodes[i].is_leaf)
-        {
-            const int leaf_id = nodes[i].left_or_leaf;
-            if (leaf_id % 6 == 0) { color[0] = 1; color[1] = 0; color[2] = 0; }  // Red
-            else if (leaf_id % 6 == 1) { color[0] = 0; color[1] = 1; color[2] = 0; }  // Green
-            else if (leaf_id % 6 == 2) { color[0] = 0; color[1] = 0; color[2] = 1; }  // Blue
-            else if (leaf_id % 6 == 3) { color[0] = 1; color[1] = 1; color[2] = 0; }  // Yellow
-            else if (leaf_id % 6 == 4) { color[0] = 1; color[1] = 0; color[2] = 1; }  // Magenta
-            else { color[0] = 0; color[1] = 1; color[2] = 1; }  // Cyan
-        }
-        else
-        {
-            color[0] = 0.7f; color[1] = 0.7f; color[2] = 0.7f;  // Gray for internal
-        }
+        GetDepthColor(targetDepth, color);
 
         // 8 corners of AABB
         const float corners[8][3] = {
-            {box.min.x, box.min.y, box.min.z},  // 0
-            {box.max.x, box.min.y, box.min.z},  // 1
-            {box.max.x, box.max.y, box.min.z},  // 2
-            {box.min.x, box.max.y, box.min.z},  // 3
-            {box.min.x, box.min.y, box.max.z},  // 4
-            {box.max.x, box.min.y, box.max.z},  // 5
-            {box.max.x, box.max.y, box.max.z},  // 6
-            {box.min.x, box.max.y, box.max.z}   // 7
+            {box.min.x, box.min.y, box.min.z},
+            {box.max.x, box.min.y, box.min.z},
+            {box.max.x, box.max.y, box.min.z},
+            {box.min.x, box.max.y, box.min.z},
+            {box.min.x, box.min.y, box.max.z},
+            {box.max.x, box.min.y, box.max.z},
+            {box.max.x, box.max.y, box.max.z},
+            {box.min.x, box.max.y, box.max.z}
         };
 
         // 12 edges of the box
         int edges[12][2] = {
-            {0,1}, {1,2}, {2,3}, {3,0},  // Bottom face
-            {4,5}, {5,6}, {6,7}, {7,4},  // Top face
-            {0,4}, {1,5}, {2,6}, {3,7}   // Vertical edges
+            {0,1}, {1,2}, {2,3}, {3,0},
+            {4,5}, {5,6}, {6,7}, {7,4},
+            {0,4}, {1,5}, {2,6}, {3,7}
         };
 
         for (auto& edge : edges)
@@ -268,6 +295,30 @@ GLuint BVHDebugRenderer::CompileShader(GLenum type, const char* source)
     }
 
     return shader;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BVHDebugRenderer::GetDepthColor(int depth, float color[3])
+{
+    const float colors[][3] = {
+        {1.0f, 0.0f, 0.0f},  // Red
+        {1.0f, 0.5f, 0.0f},  // Orange
+        {1.0f, 1.0f, 0.0f},  // Yellow
+        {0.0f, 1.0f, 0.0f},  // Green
+        {0.0f, 1.0f, 1.0f},  // Cyan
+        {0.0f, 0.5f, 1.0f},  // Light Blue
+        {0.0f, 0.0f, 1.0f},  // Blue
+        {0.5f, 0.0f, 1.0f},  // Purple
+        {1.0f, 0.0f, 1.0f},  // Magenta
+        {1.0f, 0.0f, 0.5f},  // Pink
+    };
+
+    const int numColors = sizeof(colors) / sizeof(colors[0]);
+    const int colorIndex = depth % numColors;
+
+    color[0] = colors[colorIndex][0];
+    color[1] = colors[colorIndex][1];
+    color[2] = colors[colorIndex][2];
 }
 
 //---------------------------------------------------------------------------------------------------------------------

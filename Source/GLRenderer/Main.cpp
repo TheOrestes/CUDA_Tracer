@@ -298,7 +298,7 @@ RT::AABB ComputeOverallBounds(const std::vector<RT::SceneObject>& objects)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, int start, int end, int& node_count)
+int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, int start, int end, int& node_count, int depth = 0)
 {
 	const int node_idx = node_count++;
 
@@ -311,6 +311,8 @@ int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, i
 		nodes[node_idx].left_or_leaf = start;
 		nodes[node_idx].right_or_count = end - start;
 		nodes[node_idx].is_leaf = 1;
+		nodes[node_idx].depth = depth;
+
 		return node_idx;
 	}
 
@@ -336,14 +338,15 @@ int buildBVH_simple(RT::BVHNode* nodes, std::vector<RT::SceneObject>& objects, i
 			return center_a.x < center_b.x;
 		});
 
-	const int left = buildBVH_simple(nodes, objects, start, mid, node_count);
-	const int right = buildBVH_simple(nodes, objects, mid, end, node_count);
+	const int left = buildBVH_simple(nodes, objects, start, mid, node_count, depth+1);
+	const int right = buildBVH_simple(nodes, objects, mid, end, node_count, depth+1);
 
 	// Internal node
 	nodes[node_idx].bounds = combine_aabb(nodes[left].bounds, nodes[right].bounds);
 	nodes[node_idx].left_or_leaf = left;
 	nodes[node_idx].right_or_count = right;
 	nodes[node_idx].is_leaf = 0;
+	nodes[node_idx].depth = depth;
 
 	return node_idx;
 }
@@ -415,7 +418,7 @@ void InitRandomScene(std::vector<RT::SceneObject>& objects, std::vector<RT::Mate
 	objects.push_back(Sphere0);
 	mats.push_back({ RT::LAMBERTIAN,{0.5f, 0.5f, 0.5f}, 0.0f, 0.0f });	// ground sphere
 
-	int i = 1; int objDims = 3;
+	int i = 1; int objDims = 1;
 	for (int a = -objDims; a < objDims; a++)
 	{
 		for(int b = -objDims; b < objDims; b++)
@@ -544,7 +547,8 @@ void SetupScene()
 	// Initialize BVH Debug renderer
 	gBVHRenderer = new BVHDebugRenderer();
 	gBVHRenderer->Initialize(h_nodes, gBVHNodeCount);
-	gBVHRenderer->SetLineWidth(2.5f);
+	gBVHRenderer->SetBaseLineWidth(8.0f);
+	gBVHRenderer->EnableDepthColorMode(true);
 
 	delete[] h_nodes;
 }

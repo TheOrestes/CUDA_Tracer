@@ -120,6 +120,7 @@ namespace RT
         int left_or_leaf;       // left child index OR leaf primitive index
         int right_or_count;     // right child index OR split axis (-1 for leaf)
         int is_leaf;            // 1 = leaf, 0 = internal
+        int depth;
     };
 
     //-----------
