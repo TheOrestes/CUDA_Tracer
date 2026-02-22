@@ -134,6 +134,12 @@
   <ItemGroup>
     <ClCompile Include="Source\GLRenderer\BVHDebugRenderer.cpp" />
     <ClCompile Include="Source\GLRenderer\Main.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui_draw.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui_impl_glfw.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui_impl_opengl3.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui_tables.cpp" />
+    <ClCompile Include="Source\GLRenderer\UI\imgui_widgets.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="Source\Kernels\RT_Common.cuh" />
@@ -143,6 +149,15 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\GLRenderer\BVHDebugRenderer.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imconfig.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imgui.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imgui_impl_glfw.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imgui_impl_opengl3.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imgui_impl_opengl3_loader.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imgui_internal.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imstb_rectpack.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imstb_textedit.h" />
+    <ClInclude Include="Source\GLRenderer\UI\imstb_truetype.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

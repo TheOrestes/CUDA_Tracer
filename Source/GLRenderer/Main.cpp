@@ -2,8 +2,10 @@
 //
 
 #define WIN32_LEAN_AND_MEAN
-
 #define GLEW_STATIC
+#define IMGUI_IMPL_OPENGL_LOADER_GLEW
+
+
 #include <algorithm>
 
 #include "GL/glew.h"
@@ -17,6 +19,10 @@
 #include <vector>
 #include <iostream>
 
+#include "UI/imgui.h"
+#include "UI/imgui_impl_glfw.h"
+#include "UI/imgui_impl_opengl3.h"
+
 #include "Kernels/RT_Common.cuh"
 #include "GLRenderer/BVHDebugRenderer.h"
 
@@ -25,8 +31,8 @@ GLFWwindow* window = nullptr;
 float4* gAccumulationBuffer = nullptr;
 
 // Window Settings globals
-constexpr int width = 600;
-constexpr int height = 450;
+constexpr int width = 1200;
+constexpr int height = 900;
 
 // Scene globals
 RT::Camera gCamera;
@@ -40,12 +46,17 @@ int gBVHNodeCount = 0;
 // Render settings globals
 bool accumulationComplete = false;
 int currentSPP = 0;
-constexpr int targetSPP = 50;
+int targetSPP = 50;
 float accumulationStartTime = 0.0f;  
 float totalRenderTime = 0.0f;
 bool showHeatmap = false;
 bool showBVH = false;
 int bvhDebugDepth = 3;
+
+int maxRayDepth = 5;
+int sphereCount = 2;
+float cameraSpeed = 2.5f;
+bool enableAccumulation = true;
 
 // Input State globals
 bool keys[1024] = { false };
@@ -61,6 +72,146 @@ float GetRandom01()
 {
 	return (static_cast<float>(rand()) / (RAND_MAX + 1));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+void InitImGui(GLFWwindow* window)
+{
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+	// Replace the default font entirely (first loaded font = default)
+	ImFont* customFont = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/Verdana.ttf", 15.0f);
+	IM_ASSERT(customFont != nullptr); // always assert — silent failure if path is wrong
+
+	io.FontDefault = customFont;
+
+	ImGui::StyleColorsDark();
+	ImGui_ImplGlfw_InitForOpenGL(window, false);
+	ImGui_ImplOpenGL3_Init("#version 460");
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void RenderImGuiControls(float fps, float deltaTime, float progress)
+{
+	// Start new ImGui frame
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+
+	constexpr ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_PassthruCentralNode;
+	ImGui::DockSpaceOverViewport(ImGui::GetID("MyDockspace"), ImGui::GetMainViewport(), dockspace_flags);
+
+	// Create the control window
+	ImGui::Begin("Ray Tracer Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+	ImGuiIO& io = ImGui::GetIO();
+	ImGui::Text("Mouse Position: (%.1f, %.1f)", io.MousePos.x, io.MousePos.y);
+	ImGui::Text("Mouse Clicked: %s", io.MouseClicked[0] ? "YES" : "NO");
+
+	// ============================================
+	// SECTION 1: Render Statistics Display
+	// ============================================
+	if(ImGui::CollapsingHeader("Render Statistics"))
+	{
+		// Display FPS with 1 decimal place
+		ImGui::Text("FPS: %.1f", fps);
+
+		// Display frame time in milliseconds (deltaTime is in seconds)
+		ImGui::Text("Frame Time: %.2f ms", deltaTime * 1000.0f);
+
+		// Display current SPP progress (e.g., "50 / 100")
+		ImGui::Text("Current SPP: %d / %d", currentSPP, targetSPP);
+
+		// Display total render time
+		ImGui::Text("Render Time: %.2f s", totalRenderTime);
+
+		const float barValue = std::min(1.0f, progress);
+		ImGui::ProgressBar(barValue, ImVec2(-1.0f, 0.0f));
+	}
+
+	// ============================================
+	// SECTION 2: Camera Information
+	// ============================================
+	if(ImGui::CollapsingHeader("Camera"))
+	{
+		// Display camera position (read-only)
+		ImGui::Text("Position: (%.2f, %.2f, %.2f)", gCamera.Origin.x, gCamera.Origin.y, gCamera.Origin.z);
+
+		// Slider to control camera movement speed
+		// Range: 0.1 to 10.0, directly modifies cameraSpeed variable
+		ImGui::SliderFloat("Camera Speed", &cameraSpeed, 0.1f, 10.0f);
+	}
+
+	// ============================================
+	// SECTION 3: Visualization Toggles
+	// ============================================
+	if(ImGui::CollapsingHeader("Debug Visualization"))
+	{
+		// Store old values to detect changes
+		const bool oldShowHeatmap = showHeatmap;
+
+		// Checkbox for BVH wireframe visualization
+		ImGui::Checkbox("Show BVH Wireframe", &showBVH);
+
+		// Checkbox for heatmap visualization
+		ImGui::Checkbox("Show Heatmap", &showHeatmap);
+
+		// Reset accumulation if heatmap-viz is needed, BVH-viz is independent of this!
+		if (oldShowHeatmap != showHeatmap)
+		{
+			currentSPP = 0;
+			accumulationComplete = false;
+			constexpr size_t bufferSize = width * height * sizeof(float4);
+			cudaMemset(gAccumulationBuffer, 0, bufferSize);
+		}
+	}
+
+
+	// ============================================
+	// SECTION 4: Render Settings Sliders
+	// ============================================
+	if(ImGui::CollapsingHeader("Render Settings"))
+	{
+		// Store old value to detect changes
+		const int oldTargetSPP = targetSPP;
+
+		// Slider for target SPP (samples per pixel)
+		// Range: 1 to 500
+		ImGui::SliderInt("Target SPP", &targetSPP, 1, 500);
+
+		// If target changed, mark accumulation as incomplete
+		if (oldTargetSPP != targetSPP)
+		{
+			accumulationComplete = false;
+		}
+
+		// Slider for maximum ray depth (bounces)
+		// Range: 1 to 50
+		ImGui::SliderInt("Max Ray Depth", &maxRayDepth, 1, 50);
+	}
+
+	// ============================================
+	// SECTION 6: Manual Reset Button
+	// ============================================
+	ImGui::Separator();
+	if (ImGui::Button("Reset Accumulation")) 
+	{
+		currentSPP = 0;
+		accumulationComplete = false;
+		constexpr size_t bufferSize = width * height * sizeof(float4);
+		cudaMemset(gAccumulationBuffer, 0, bufferSize);
+	}
+
+	ImGui::End();  // End of window
+
+	// Render ImGui draw data to screen
+	ImGui::Render();
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
 
 //---------------------------------------------------------------------------------------------------------------------
 // Helper to check CUDA errors
@@ -117,6 +268,9 @@ void InitGLEW()
 // 3. Inputs
 void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 {
+	// Manually call ImGui's callback
+	ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mode);
+
 	if (key >= 0 && key < 1024)
 	{
 		if (action == GLFW_PRESS)
@@ -159,11 +313,13 @@ void KeyHandler(GLFWwindow* window, int key, int scancode, int action, int mode)
 	}
 }
 
-
 //---------------------------------------------------------------------------------------------------------------------
 // 3. Mouse button callback
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 {
+	// Manually call ImGui's callback
+	ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+
 	if (button == GLFW_MOUSE_BUTTON_RIGHT)
 	{
 		if (action == GLFW_PRESS)
@@ -184,6 +340,9 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 // 3. Mouse movement callback
 void MouseCallback(GLFWwindow* window, double xpos, double ypos)
 {
+	// Manually call ImGui's callback
+	ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+
 	if (!rightMousePressed) return;
 
 	if (firstMouse)
@@ -203,6 +362,20 @@ void MouseCallback(GLFWwindow* window, double xpos, double ypos)
 	gCamera.Rotate(static_cast<float>(xoffset) * mouseSensitivity, static_cast<float>(yoffset) * mouseSensitivity);
 
 	cameraRotated = true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Scroll Callback
+void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
+{
+	ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Char typing callback
+void CharCallback(GLFWwindow* window, unsigned int c)
+{
+	ImGui_ImplGlfw_CharCallback(window, c);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -418,7 +591,7 @@ void InitRandomScene(std::vector<RT::SceneObject>& objects, std::vector<RT::Mate
 	objects.push_back(Sphere0);
 	mats.push_back({ RT::LAMBERTIAN,{0.5f, 0.5f, 0.5f}, 0.0f, 0.0f });	// ground sphere
 
-	int i = 1; int objDims = 1;
+	int i = 1; int objDims = 10;
 	for (int a = -objDims; a < objDims; a++)
 	{
 		for(int b = -objDims; b < objDims; b++)
@@ -519,8 +692,8 @@ void SetupScene()
 	std::vector<RT::SceneObject> sceneObjects;
 	std::vector<RT::Material> materials;
 
-	//InitSimpleScene(sceneObjects, materials);
-	InitRandomScene(sceneObjects, materials);
+	InitSimpleScene(sceneObjects, materials);
+	//InitRandomScene(sceneObjects, materials);
 
 	// Optional: Check scene bounds
 	const RT::AABB sceneBounds = ComputeOverallBounds(sceneObjects);
@@ -559,10 +732,13 @@ int main()
 {
 	InitGLFW();
 	InitGLEW();
+	InitImGui(window);
 
 	glfwSetKeyCallback(window, KeyHandler);							// Keyboard callback
 	glfwSetMouseButtonCallback(window, MouseButtonCallback);		// Mouse button callback
 	glfwSetCursorPosCallback(window, MouseCallback);				// Mouse movement callback
+	glfwSetScrollCallback(window, ScrollCallback);					// Mouse scroll callback
+	glfwSetCharCallback(window, CharCallback);						// Char type callback
 
 	GLuint fbTexture;
 	cudaGraphicsResource_t fbCudaResource;
@@ -588,12 +764,27 @@ int main()
 	float deltaTime = 0.0f;
 	float lastFrameTime = 0.0f;
 
+	// FPS calculation 
+	float fpsTimer = 0.0f;
+	int frameCount = 0;
+	float fps = 0.0f;
+	float progress = 0.0f;
+
 	// Message Loop!
 	while (!glfwWindowShouldClose(window))
 	{
 		const float currentTime = static_cast<float>(glfwGetTime());
 		deltaTime = currentTime - lastFrameTime;
 		lastFrameTime = currentTime;
+
+		// FPS Calculations!
+		frameCount++;
+		fpsTimer += deltaTime;
+		if (fpsTimer >= 1.0f) {
+			fps = frameCount / fpsTimer;
+			frameCount = 0;
+			fpsTimer = 0.0f;
+		}
 
 		glfwPollEvents();
 		const bool cameraMoved = ProcessInput(deltaTime);
@@ -620,22 +811,10 @@ int main()
 			// Run CUDA kernel!
 			RunRayTracingKernel(fbCudaResource, width, height, gCamera, gAccumulationBuffer, currentSPP, dSceneObject, gNumObjects, dMaterial, d_nodes, gBVHNodeCount, true, showHeatmap);
 
-			// Print progress every 1/5th step...
-			if (currentSPP % (targetSPP / 5) == 0)
-			{
-				totalRenderTime = currentTime - accumulationStartTime;
-
-				const float progress = static_cast<float>(currentSPP) / targetSPP * 100.0f;
-				const float sppPerSecond = static_cast<float>(currentSPP) / totalRenderTime;
-
-				std::cout << "Progress: " << currentSPP << "/" << targetSPP
-					<< " SPP (" << std::fixed << std::setprecision(1)
-					<< progress << "%) - "
-					<< totalRenderTime << "s - "
-					<< std::setprecision(2) << sppPerSecond << " SPP/s"
-					<< '\n';
-			}
-
+			// Update debug info!
+			totalRenderTime = currentTime - accumulationStartTime;
+			progress = static_cast<float>(currentSPP) / static_cast<float>(targetSPP);
+			
 			// Check if complete!
 			if (currentSPP >= targetSPP)
 			{
@@ -673,6 +852,8 @@ int main()
 			gBVHRenderer->Render(gCamera);
 		}
 
+		RenderImGuiControls(fps, deltaTime, progress);
+
 		glfwSwapBuffers(window);
 	}
 
@@ -682,6 +863,10 @@ int main()
 		delete gBVHRenderer;
 		gBVHRenderer = nullptr;
 	}
+
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
 
 	// Always unregister before destroying the GL texture
 	cudaGraphicsUnregisterResource(fbCudaResource);
