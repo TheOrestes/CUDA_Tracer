@@ -35,3 +35,7 @@ https://github.com/user-attachments/assets/7dbb64cc-2e07-4f8a-b349-a77262739445
 
 ## 12. Random Scene with large number of spheres for max GPU load
 <img width="594" height="474" alt="image" src="https://github.com/user-attachments/assets/0404dca0-2ad1-4c3e-ab4d-1af4ecfd130f" />
+
+## 13. ImGUI Integration
+https://github.com/user-attachments/assets/e529245d-a1e1-4ba3-908a-282d7b82f73b
+
